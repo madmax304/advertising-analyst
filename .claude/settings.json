@@ -1,13 +1,13 @@
 {
+  "//": "Baseline permissions shared across machines via git. For scheduled-task sessions to run without freezing on Bash approval prompts, you ALSO need exact-match patterns in .claude/settings.local.json (gitignored) that match the exact command the task generates, including any shell redirections like 2>&1. See the .env.example or the README for rationale — verified 2026-04-17 against RevenueCat's working task setup.",
   "permissions": {
     "allow": [
-      "Bash(cd \"/Users/maxwellanderson/Documents/Claude/Projects/Advertising Analyst\":*)",
-      "Bash(git pull:*)",
-      "Bash(git status:*)",
+      "Bash(npm install:*)",
+      "Bash(npm ci:*)",
       "Bash(npm run digest:*)",
       "Bash(npm run typecheck:*)",
-      "Bash(npm install:*)",
-      "Bash(npm ci:*)"
+      "Bash(git pull:*)",
+      "Bash(git status:*)"
     ]
   }
 }
