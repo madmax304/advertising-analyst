@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"/Users/maxwellanderson/Documents/Claude/Projects/Advertising Analyst\":*)",
+      "Bash(git pull:*)",
+      "Bash(git status:*)",
+      "Bash(npm run digest:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm install:*)",
+      "Bash(npm ci:*)"
+    ]
+  }
+}
