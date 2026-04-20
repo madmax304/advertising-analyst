@@ -1,5 +1,6 @@
 import type { CreativeMetrics, DateRange } from "../types.js";
 import { EVENT_MAP } from "../events/eventMap.js";
+import { PinterestAuthError, refreshAccessToken } from "./pinterestAuth.js";
 
 const PINTEREST_API = "https://api.pinterest.com/v5";
 const ATTRIBUTION_LABEL = "30-day click";
@@ -39,6 +40,11 @@ async function pinterestGet<T>(path: string, token: string, query: Record<string
   const url = new URL(`${PINTEREST_API}${path}`);
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 401) {
+    // Token expired / revoked. The top-level caller catches this specific type
+    // and refreshes + retries once.
+    throw new PinterestAuthError(`Pinterest GET ${path} auth failed (401)`);
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Pinterest GET ${path} failed ${res.status}: ${body.slice(0, 400)}`);
@@ -128,6 +134,21 @@ function toNum(v: unknown): number {
 }
 
 export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics[]> {
+  // Pinterest "production" OAuth tokens expire in 30 days, but sometimes get
+  // revoked earlier. On 401, refresh via the refresh_token and retry once.
+  try {
+    return await doFetchCreativeMetrics(range);
+  } catch (err) {
+    if (err instanceof PinterestAuthError) {
+      console.error("[pinterest] access token rejected; refreshing and retrying once");
+      await refreshAccessToken();
+      return doFetchCreativeMetrics(range);
+    }
+    throw err;
+  }
+}
+
+async function doFetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics[]> {
   const env = readEnv();
 
   const ads = await listAllAds(env);
