@@ -4,6 +4,8 @@ import { EVENT_MAP, REVENUE_MAP } from "../events/eventMap.js";
 const GRAPH_API = "https://graph.facebook.com/v20.0";
 const ATTRIBUTION_LABEL = "7-day click";
 
+export type CreativeEnrichment = { thumbnailUrl?: string; previewUrl?: string };
+
 type MetaAction = { action_type: string; value: string };
 type MetaInsightRow = {
   date_start: string;
@@ -113,4 +115,47 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
     revenue: sumAction(row.action_values, REVENUE_MAP.purchase.meta),
     trialStarts: sumAction(row.conversions, EVENT_MAP.trial_start.meta),
   }));
+}
+
+/**
+ * Given a list of ad IDs, fetch creative info (thumbnail URL and a preview
+ * link) for each. Batch call — one request for up to ~50 IDs.
+ * Called by the CLI only for top-ranked creatives to avoid N+1 per-ad calls.
+ */
+export async function fetchThumbnails(
+  adIds: string[],
+): Promise<Record<string, CreativeEnrichment>> {
+  if (adIds.length === 0) return {};
+  const env = readEnv();
+
+  const params = new URLSearchParams({
+    access_token: env.token,
+    ids: adIds.join(","),
+    fields: "creative{thumbnail_url,effective_object_story_id,image_url},preview_shareable_link",
+  });
+
+  const res = await fetch(`${GRAPH_API}/?${params.toString()}`);
+  if (!res.ok) {
+    // Non-fatal — thumbnails are enrichment. Log and fall back to no thumbs.
+    const body = await res.text();
+    console.error(`[meta] thumbnail fetch failed ${res.status}: ${body.slice(0, 200)}`);
+    return {};
+  }
+
+  const data = (await res.json()) as Record<
+    string,
+    {
+      creative?: { thumbnail_url?: string; image_url?: string };
+      preview_shareable_link?: string;
+    }
+  >;
+
+  const out: Record<string, CreativeEnrichment> = {};
+  for (const [id, info] of Object.entries(data)) {
+    out[id] = {
+      thumbnailUrl: info.creative?.thumbnail_url ?? info.creative?.image_url,
+      previewUrl: info.preview_shareable_link,
+    };
+  }
+  return out;
 }

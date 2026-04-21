@@ -8,6 +8,10 @@ export type RankedCreative = {
   purchases: number;
   trialStarts: number;
   roas: number;
+  // Populated post-ranking by adapter-specific enrichment (fetches image URLs
+  // from the platform's creative / pin endpoints).
+  thumbnailUrl?: string;
+  previewUrl?: string;
 };
 
 export type RankOptions = {

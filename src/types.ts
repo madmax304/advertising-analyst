@@ -15,6 +15,10 @@ export type CreativeMetrics = {
   purchases: number;
   revenue: number; // from purchase events, USD
   trialStarts: number;
+  // Optional enrichment — populated by adapter's post-ranking enrichment step
+  // for the top creatives only, since thumbnail lookups require extra API calls.
+  thumbnailUrl?: string;
+  previewUrl?: string;
 };
 
 export type DateRange = {

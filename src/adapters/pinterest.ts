@@ -23,10 +23,16 @@ type AnalyticsRow = Record<string, unknown> & {
   DATE?: string;
 };
 
-type AdMeta = { id: string; name: string; campaign_id: string };
+type AdMeta = { id: string; name: string; campaign_id: string; pin_id?: string };
 type CampaignMeta = { id: string; name: string };
 
 type PinterestEnv = { token: string; adAccount: string };
+
+export type CreativeEnrichment = { thumbnailUrl?: string; previewUrl?: string };
+
+// Module-level cache of adId → pin_id, populated by listAllAds during the main
+// pull. Used by fetchThumbnails without re-hitting /ads.
+let adIdToPinId: Record<string, string> = {};
 
 function readEnv(): PinterestEnv {
   const token = process.env.PINTEREST_ACCESS_TOKEN;
@@ -55,6 +61,7 @@ async function pinterestGet<T>(path: string, token: string, query: Record<string
 async function listAllAds(env: PinterestEnv): Promise<AdMeta[]> {
   // /ad_accounts/{id}/ads returns everything in the account. We filter analytics
   // down to these ad_ids. Pagination via bookmark.
+  // pin_id is included in the default response — we cache it for thumbnail lookup.
   const ads: AdMeta[] = [];
   let bookmark: string | undefined;
   do {
@@ -68,6 +75,13 @@ async function listAllAds(env: PinterestEnv): Promise<AdMeta[]> {
     ads.push(...(page.items ?? []));
     bookmark = page.bookmark;
   } while (bookmark);
+
+  // Refresh the cache for fetchThumbnails.
+  adIdToPinId = {};
+  for (const ad of ads) {
+    if (ad.pin_id) adIdToPinId[ad.id] = ad.pin_id;
+  }
+
   return ads;
 }
 
@@ -184,4 +198,51 @@ async function doFetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics
       trialStarts: toNum(row[EVENT_MAP.trial_start.pinterest]),
     };
   });
+}
+
+/**
+ * For the given ad IDs, fetch the underlying Pinterest pin's image URL.
+ * Uses adIdToPinId populated during listAllAds — so this must be called
+ * AFTER fetchCreativeMetrics has run in the same process.
+ * Non-fatal on errors: returns empty for ads we can't enrich.
+ */
+export async function fetchThumbnails(
+  adIds: string[],
+): Promise<Record<string, CreativeEnrichment>> {
+  if (adIds.length === 0) return {};
+
+  const token = process.env.PINTEREST_ACCESS_TOKEN;
+  const adAccount = process.env.PINTEREST_AD_ACCOUNT_ID;
+  if (!token || !adAccount) return {};
+
+  const out: Record<string, CreativeEnrichment> = {};
+
+  for (const adId of adIds) {
+    const pinId = adIdToPinId[adId];
+    if (!pinId) continue;
+    try {
+      const pin = await pinterestGet<{
+        id: string;
+        media?: { images?: Record<string, { url: string; width?: number; height?: number }> };
+      }>(`/pins/${pinId}`, token, { ad_account_id: adAccount });
+
+      // Pinterest returns multiple image sizes. Prefer medium-ish (600x, 400x)
+      // over originals — Slack renders thumbnails ~75px anyway.
+      const images = pin.media?.images ?? {};
+      const preferredSize =
+        images["600x"]?.url ?? images["400x300"]?.url ?? images["236x"]?.url ?? images["originals"]?.url;
+
+      out[adId] = {
+        thumbnailUrl: preferredSize,
+        previewUrl: `https://www.pinterest.com/pin/${pinId}/`,
+      };
+    } catch (err) {
+      console.error(
+        `[pinterest] thumbnail fetch failed for ad ${adId} (pin ${pinId}):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  return out;
 }

@@ -1,5 +1,5 @@
 import { IncomingWebhook } from "@slack/webhook";
-import type { Platform } from "../types.js";
+import type { Platform, DateRange } from "../types.js";
 import type { Summary } from "../analyst/summarize.js";
 import type { RankedCreative } from "../analyst/rankCreatives.js";
 
@@ -51,6 +51,26 @@ function truncateAdName(name: string): string {
   return `${name.slice(0, MAX_AD_NAME_CHARS - 1).trimEnd()}…`;
 }
 
+function creativeBlock(c: RankedCreative, rank: number): SlackBlock {
+  const name = truncateAdName(c.adName);
+  // If we have a previewUrl, linkify the name so clicks open the ad.
+  const nameText = c.previewUrl ? `<${c.previewUrl}|${name}>` : name;
+  const body = `*${rank}.* ${nameText}\nROAS *${ratio(c.roas)}*, Spend ${usd(c.spend)}, ${plural(c.trialStarts, "trial")}`;
+
+  const block: SlackBlock = {
+    type: "section",
+    text: { type: "mrkdwn", text: body },
+  };
+  if (c.thumbnailUrl) {
+    block.accessory = {
+      type: "image",
+      image_url: c.thumbnailUrl,
+      alt_text: name,
+    };
+  }
+  return block;
+}
+
 function sectionBlocks(section: PlatformSection): SlackBlock[] {
   const label = PLATFORM_LABEL[section.platform];
 
@@ -82,43 +102,43 @@ function sectionBlocks(section: PlatformSection): SlackBlock[] {
     `*CPA:* ${usdOrDash(summary.cpa)}  |  ` +
     `*Cost/Trial:* ${usdOrDash(summary.cpTrial)}`;
 
-  const topLines = topCreatives.length
-    ? topCreatives
-        .map(
-          (c, i) =>
-            `  ${i + 1}. ${truncateAdName(c.adName)} — ROAS ${ratio(c.roas)}, Spend ${usd(c.spend)}, ${plural(c.trialStarts, "trial")}`,
-        )
-        .join("\n")
-    : "  _No creatives cleared the spend floor._";
-
-  return [
-    { type: "divider" },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*── ${label} (${attributionWindow}) ──*\n${totalsLine1}\n${totalsLine2}\n*Top creatives by ROAS:*\n${topLines}`,
-      },
+  const headerBlock: SlackBlock = {
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: `*── ${label} (${attributionWindow}) ──*\n${totalsLine1}\n${totalsLine2}\n*Top creatives by ROAS:*`,
     },
-  ];
+  };
+
+  const creativeBlocks: SlackBlock[] = topCreatives.length
+    ? topCreatives.map((c, i) => creativeBlock(c, i + 1))
+    : [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "  _No creatives cleared the spend floor._" },
+        },
+      ];
+
+  return [{ type: "divider" }, headerBlock, ...creativeBlocks];
 }
 
-export function buildDigestBlocks(date: string, sections: PlatformSection[]): SlackBlock[] {
-  // date is YYYY-MM-DD; format like "Thu Apr 16"
-  const [y, m, d] = date.split("-").map((s) => Number(s));
-  const pretty =
-    y !== undefined && m !== undefined && d !== undefined
-      ? new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-          timeZone: "UTC",
-        })
-      : date;
+function formatDateShort(ymd: string): string {
+  // "2026-04-19" → "Apr 19"
+  const [y, m, d] = ymd.split("-").map((s) => Number(s));
+  if (y === undefined || m === undefined || d === undefined) return ymd;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+export function buildDigestBlocks(range: DateRange, sections: PlatformSection[]): SlackBlock[] {
+  const pretty = `${formatDateShort(range.start)} → ${formatDateShort(range.end)}`;
 
   const header: SlackBlock = {
     type: "header",
-    text: { type: "plain_text", text: `📊 Daily Media Digest — ${pretty}` },
+    text: { type: "plain_text", text: `📊 7-Day Media Digest — ${pretty}` },
   };
 
   return [header, ...sections.flatMap(sectionBlocks)];
@@ -126,13 +146,13 @@ export function buildDigestBlocks(date: string, sections: PlatformSection[]): Sl
 
 export async function postDigest(
   webhookUrl: string,
-  date: string,
+  range: DateRange,
   sections: PlatformSection[],
 ): Promise<void> {
-  const blocks = buildDigestBlocks(date, sections);
+  const blocks = buildDigestBlocks(range, sections);
   const webhook = new IncomingWebhook(webhookUrl);
-  // `text` is a fallback for notifications + clients that don't render blocks.
+  const fallbackText = `7-Day Media Digest — ${range.start} to ${range.end}`;
   // Cast: we build blocks with the open-ended SlackBlock shape; @slack/webhook
   // types `blocks` as a strict union that doesn't buy us anything here.
-  await webhook.send({ text: `Daily Media Digest — ${date}`, blocks: blocks as never });
+  await webhook.send({ text: fallbackText, blocks: blocks as never });
 }
