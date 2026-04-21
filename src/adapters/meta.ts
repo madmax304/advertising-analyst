@@ -131,7 +131,8 @@ export async function fetchThumbnails(
   const params = new URLSearchParams({
     access_token: env.token,
     ids: adIds.join(","),
-    fields: "creative{thumbnail_url,effective_object_story_id,image_url},preview_shareable_link",
+    fields:
+      "creative{thumbnail_url,image_url,instagram_permalink_url,effective_object_story_id}",
   });
 
   const res = await fetch(`${GRAPH_API}/?${params.toString()}`);
@@ -145,16 +146,29 @@ export async function fetchThumbnails(
   const data = (await res.json()) as Record<
     string,
     {
-      creative?: { thumbnail_url?: string; image_url?: string };
-      preview_shareable_link?: string;
+      creative?: {
+        thumbnail_url?: string;
+        image_url?: string;
+        instagram_permalink_url?: string;
+        effective_object_story_id?: string;
+      };
     }
   >;
 
   const out: Record<string, CreativeEnrichment> = {};
   for (const [id, info] of Object.entries(data)) {
+    const c = info.creative ?? {};
+    // Preview URL priority:
+    // 1. instagram_permalink_url — public IG post, works with no login
+    // 2. effective_object_story_id → construct public FB post URL
+    // We avoid preview_shareable_link (fb.me/...) because it redirects to
+    // Business Manager login and produces a dead-end spinner in Chrome.
+    const igUrl = c.instagram_permalink_url;
+    const fbStoryId = c.effective_object_story_id;
+    const previewUrl = igUrl ?? (fbStoryId ? `https://www.facebook.com/${fbStoryId}` : undefined);
     out[id] = {
-      thumbnailUrl: info.creative?.thumbnail_url ?? info.creative?.image_url,
-      previewUrl: info.preview_shareable_link,
+      thumbnailUrl: c.thumbnail_url ?? c.image_url,
+      previewUrl,
     };
   }
   return out;
