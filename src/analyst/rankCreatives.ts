@@ -14,25 +14,31 @@ export type RankedCreative = {
   previewUrl?: string;
 };
 
+export type RankBy = "roas" | "spend";
+
 export type RankOptions = {
-  by?: "roas"; // room to grow (e.g. "cpa"), but v1 is ROAS-only
+  by: RankBy;
   n?: number;
   minSpend?: number; // floor so a $2 spend creative can't win the board
+  excludeAdIds?: Iterable<string>; // for deduping across multiple ranked lists
 };
 
 /**
  * Aggregates rows by adId, computes ROAS per creative, filters by minSpend,
- * and returns the top N sorted descending by ROAS.
+ * optionally excludes specific ad IDs, and returns the top N sorted
+ * descending by the requested metric.
  * Pure function, no I/O.
  */
 export function rankCreatives(
   metrics: CreativeMetrics[],
-  opts: RankOptions = {},
+  opts: RankOptions,
 ): RankedCreative[] {
-  const { n = 3, minSpend = 50 } = opts;
+  const { by, n = 3, minSpend = 50, excludeAdIds } = opts;
+  const exclude = new Set(excludeAdIds ?? []);
 
   const byAd = new Map<string, RankedCreative>();
   for (const m of metrics) {
+    if (exclude.has(m.adId)) continue;
     const existing = byAd.get(m.adId);
     if (existing) {
       existing.spend += m.spend;
@@ -52,10 +58,14 @@ export function rankCreatives(
     }
   }
 
-  const ranked = [...byAd.values()]
+  const withRoas = [...byAd.values()]
     .map((c) => ({ ...c, roas: c.spend > 0 ? c.revenue / c.spend : 0 }))
-    .filter((c) => c.spend >= minSpend)
-    .sort((a, b) => b.roas - a.roas);
+    .filter((c) => c.spend >= minSpend);
 
-  return ranked.slice(0, n);
+  const sorted =
+    by === "spend"
+      ? withRoas.sort((a, b) => b.spend - a.spend)
+      : withRoas.sort((a, b) => b.roas - a.roas);
+
+  return sorted.slice(0, n);
 }

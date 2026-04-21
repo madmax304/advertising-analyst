@@ -16,9 +16,12 @@ import type { CreativeMetrics, Platform } from "../types.js";
 const TIMEZONE = "America/Los_Angeles";
 // Trailing 7 complete days (excludes today since it's still partial).
 const WINDOW_DAYS = 7;
-// Min spend floor for creative ranking, tuned for the 7-day window.
-// Equivalent to ~$36/day — a creative below this is noise, not signal.
-const MIN_SPEND_FLOOR_USD = 250;
+// Separate floors per ranking lens. Spend list is for "where's the budget" — a
+// $250 7-day floor (≈$36/d) keeps it focused on real bets. ROAS list is for
+// "what's efficient" — lower $50 floor so a promising-but-underfunded $80
+// creative at 3x ROAS can surface as "should we scale this?" signal.
+const SPEND_FLOOR_FOR_SPEND_LIST = 250;
+const SPEND_FLOOR_FOR_ROAS_LIST = 50;
 
 /** Returns a YYYY-MM-DD date string N days ago in the given timezone. */
 function daysAgoInTz(daysAgo: number, tz: string): string {
@@ -50,26 +53,37 @@ const ADAPTERS: Partial<
   pinterest: { fetch: fetchPinterest, window: "30-day click" },
 };
 
-async function enrichWithThumbnails(
-  top: RankedCreative[],
+/**
+ * Batch-fetch thumbnails for the union of ad IDs across multiple lists, then
+ * apply the same enrichment back to each list. Single API call even when the
+ * lists overlap or we pass more than one.
+ */
+async function enrichLists(
+  lists: RankedCreative[][],
   fetchThumbnails: ThumbFn | undefined,
-): Promise<RankedCreative[]> {
-  if (!fetchThumbnails || top.length === 0) return top;
+): Promise<RankedCreative[][]> {
+  if (!fetchThumbnails) return lists;
+  const allAdIds = [...new Set(lists.flatMap((list) => list.map((c) => c.adId)))];
+  if (allAdIds.length === 0) return lists;
+
+  let enrichment: Record<string, { thumbnailUrl?: string; previewUrl?: string }> = {};
   try {
-    const enrichment = await fetchThumbnails(top.map((c) => c.adId));
-    return top.map((c) => ({
-      ...c,
-      thumbnailUrl: enrichment[c.adId]?.thumbnailUrl,
-      previewUrl: enrichment[c.adId]?.previewUrl,
-    }));
+    enrichment = await fetchThumbnails(allAdIds);
   } catch (err) {
-    // Thumbnails are enrichment, not critical. Log and fall back to text-only.
     console.error(
       "[digest] thumbnail enrichment failed, rendering text-only:",
       err instanceof Error ? err.message : err,
     );
-    return top;
+    return lists;
   }
+
+  return lists.map((list) =>
+    list.map((c) => ({
+      ...c,
+      thumbnailUrl: enrichment[c.adId]?.thumbnailUrl,
+      previewUrl: enrichment[c.adId]?.previewUrl,
+    })),
+  );
 }
 
 async function runPlatform(
@@ -82,14 +96,30 @@ async function runPlatform(
   }
   try {
     const rows = await adapter.fetch(range);
-    const ranked = rankCreatives(rows, { by: "roas", n: 3, minSpend: MIN_SPEND_FLOOR_USD });
-    const topCreatives = await enrichWithThumbnails(ranked, adapter.fetchThumbnails);
+    // Rank by spend first (the "where's the budget" lens), then by ROAS
+    // excluding anything already shown in the spend list (dedup).
+    const rawSpend = rankCreatives(rows, {
+      by: "spend",
+      n: 3,
+      minSpend: SPEND_FLOOR_FOR_SPEND_LIST,
+    });
+    const rawRoas = rankCreatives(rows, {
+      by: "roas",
+      n: 3,
+      minSpend: SPEND_FLOOR_FOR_ROAS_LIST,
+      excludeAdIds: rawSpend.map((c) => c.adId),
+    });
+    const [topBySpend, topByRoas] = await enrichLists(
+      [rawSpend, rawRoas],
+      adapter.fetchThumbnails,
+    );
     return {
       ok: true,
       platform,
       attributionWindow: adapter.window,
       summary: summarize(rows),
-      topCreatives,
+      topBySpend: topBySpend ?? rawSpend,
+      topByRoas: topByRoas ?? rawRoas,
     };
   } catch (err) {
     return {

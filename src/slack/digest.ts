@@ -9,7 +9,8 @@ export type PlatformSection =
       platform: Platform;
       attributionWindow: string;
       summary: Summary;
-      topCreatives: RankedCreative[];
+      topBySpend: RankedCreative[];
+      topByRoas: RankedCreative[]; // deduped against topBySpend
     }
   | {
       ok: false;
@@ -87,7 +88,7 @@ function sectionBlocks(section: PlatformSection): SlackBlock[] {
     ];
   }
 
-  const { summary, topCreatives, attributionWindow } = section;
+  const { summary, topBySpend, topByRoas, attributionWindow } = section;
   // Two-line totals to keep the digest scannable even with more fields.
   // Line 1 = reach + conversion counts. Line 2 = efficiency metrics.
   const totalsLine1 =
@@ -102,24 +103,36 @@ function sectionBlocks(section: PlatformSection): SlackBlock[] {
     `*CPA:* ${usdOrDash(summary.cpa)}  |  ` +
     `*Cost/Trial:* ${usdOrDash(summary.cpTrial)}`;
 
-  const headerBlock: SlackBlock = {
+  const platformHeader: SlackBlock = {
     type: "section",
     text: {
       type: "mrkdwn",
-      text: `*── ${label} (${attributionWindow}) ──*\n${totalsLine1}\n${totalsLine2}\n*Top creatives by ROAS:*`,
+      text: `*── ${label} (${attributionWindow}) ──*\n${totalsLine1}\n${totalsLine2}`,
     },
   };
 
-  const creativeBlocks: SlackBlock[] = topCreatives.length
-    ? topCreatives.map((c, i) => creativeBlock(c, i + 1))
+  return [
+    { type: "divider" },
+    platformHeader,
+    ...rankedSubsection("Top by Spend", topBySpend),
+    ...rankedSubsection("Top by ROAS", topByRoas),
+  ];
+}
+
+function rankedSubsection(title: string, items: RankedCreative[]): SlackBlock[] {
+  const header: SlackBlock = {
+    type: "section",
+    text: { type: "mrkdwn", text: `*${title}:*` },
+  };
+  const body: SlackBlock[] = items.length
+    ? items.map((c, i) => creativeBlock(c, i + 1))
     : [
         {
           type: "section",
           text: { type: "mrkdwn", text: "  _No creatives cleared the spend floor._" },
         },
       ];
-
-  return [{ type: "divider" }, headerBlock, ...creativeBlocks];
+  return [header, ...body];
 }
 
 function formatDateShort(ymd: string): string {
