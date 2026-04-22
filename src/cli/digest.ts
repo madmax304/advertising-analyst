@@ -124,6 +124,8 @@ async function runPlatform(
       summary: summarize(rows),
       topBySpend: topBySpend ?? rawSpend,
       topByRoas: topByRoas ?? rawRoas,
+      spendFloor: SPEND_FLOOR_FOR_SPEND_LIST,
+      roasFloor: SPEND_FLOOR_FOR_ROAS_LIST,
     };
   } catch (err) {
     return {

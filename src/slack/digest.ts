@@ -11,6 +11,8 @@ export type PlatformSection =
       summary: Summary;
       topBySpend: RankedCreative[];
       topByRoas: RankedCreative[]; // deduped against topBySpend
+      spendFloor: number; // USD minimum for topBySpend, shown in the digest header
+      roasFloor: number; // USD minimum for topByRoas
     }
   | {
       ok: false;
@@ -114,22 +116,31 @@ function sectionBlocks(section: PlatformSection): SlackBlock[] {
   return [
     { type: "divider" },
     platformHeader,
-    ...rankedSubsection("Top by Spend", topBySpend),
-    ...rankedSubsection("Top by ROAS", topByRoas),
+    ...rankedSubsection("Top by Spend", topBySpend, section.spendFloor),
+    ...rankedSubsection("Top by ROAS", topByRoas, section.roasFloor),
   ];
 }
 
-function rankedSubsection(title: string, items: RankedCreative[]): SlackBlock[] {
+function rankedSubsection(
+  title: string,
+  items: RankedCreative[],
+  floor: number,
+): SlackBlock[] {
+  // Include the floor in the header so readers can explain "why only 2?"
+  // without asking. Format: "Top by Spend ($250+):"
   const header: SlackBlock = {
     type: "section",
-    text: { type: "mrkdwn", text: `*${title}:*` },
+    text: { type: "mrkdwn", text: `*${title} (${usd(floor)}+):*` },
   };
   const body: SlackBlock[] = items.length
     ? items.map((c, i) => creativeBlock(c, i + 1))
     : [
         {
           type: "section",
-          text: { type: "mrkdwn", text: "  _No creatives cleared the spend floor._" },
+          text: {
+            type: "mrkdwn",
+            text: `  _No creatives cleared the ${usd(floor)} spend floor._`,
+          },
         },
       ];
   return [header, ...body];
