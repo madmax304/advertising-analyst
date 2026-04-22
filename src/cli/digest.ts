@@ -1,8 +1,8 @@
 import "dotenv/config";
-import { fetchCreativeMetrics as fetchPinterest } from "../adapters/pinterest.js";
-// fetchPinterestThumbnails is intentionally not wired: it needs pins:read +
-// boards:read scopes on the Pinterest token. Current token has only ads:read.
-// Re-authorize with broader scope to enable Pinterest thumbnails.
+import {
+  fetchCreativeMetrics as fetchPinterest,
+  fetchThumbnails as fetchPinterestThumbnails,
+} from "../adapters/pinterest.js";
 import {
   fetchCreativeMetrics as fetchMeta,
   fetchThumbnails as fetchMetaThumbnails,
@@ -50,7 +50,11 @@ const ADAPTERS: Partial<
   // TikTok's current OAuth scope doesn't include /ad/get/, /creative/* — all
   // three return 40001 permission errors. Text-only until we widen the scope.
   tiktok: { fetch: fetchTikTok, window: "7-day click / 1-day view" },
-  pinterest: { fetch: fetchPinterest, window: "30-day click" },
+  pinterest: {
+    fetch: fetchPinterest,
+    window: "30-day click",
+    fetchThumbnails: fetchPinterestThumbnails,
+  },
 };
 
 /**
