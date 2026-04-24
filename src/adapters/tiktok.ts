@@ -4,6 +4,12 @@ import { EVENT_MAP } from "../events/eventMap.js";
 const TIKTOK_API = "https://business-api.tiktok.com/open_api/v1.3";
 const ATTRIBUTION_LABEL = "7-day click / 1-day view";
 
+export type CreativeEnrichment = {
+  thumbnailUrl?: string;
+  previewUrl?: string;
+  adName?: string; // override caption-based name with the real ad name from /ad/get/
+};
+
 type TikTokRow = {
   dimensions: { ad_id: string; stat_time_day: string };
   metrics: Record<string, string | undefined>;
@@ -116,4 +122,173 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
       trialStarts,
     };
   });
+}
+
+type TikTokAdMeta = {
+  ad_id: string;
+  ad_name?: string;
+  video_id?: string | null;
+  tiktok_item_id?: string | null;
+};
+
+/**
+ * For top-ranked TikTok ads, look up creative metadata. Two ad shapes
+ * to handle (verified against Natal's account 2026-04-24):
+ *
+ * 1. **Upload ads** — have a `video_id`. Real ad_name is filename-style
+ *    ("Video Apr 17 2026, 2 13 10 PM_zBfMWNZQ.mp4"). Thumbnail comes from
+ *    /file/video/ad/info/ → video_cover_url. No public preview URL.
+ *
+ * 2. **Spark Ads** — have a `tiktok_item_id` (the original organic post).
+ *    No video_id. ad_name is the caption (TikTok auto-fills). Thumbnail
+ *    + public preview URL come from TikTok's public oEmbed endpoint
+ *    (no auth required). Public URL: tiktok.com/@username/video/{item_id}.
+ *
+ * Needs: Ads Management→Ad scope (for /ad/get/) and Creative Management
+ * scope (for /file/video/ad/info/). Spark Ad lookup uses public oEmbed
+ * so doesn't need any TikTok scope.
+ */
+export async function fetchThumbnails(
+  adIds: string[],
+): Promise<Record<string, CreativeEnrichment>> {
+  if (adIds.length === 0) return {};
+  const env = readEnv();
+
+  // Step 1: /ad/get/ for ad_name, video_id, tiktok_item_id per ad
+  const adsList = await fetchAdsMeta(env, adIds);
+
+  const out: Record<string, CreativeEnrichment> = {};
+  const videoIdToAdIds = new Map<string, string[]>();
+  const itemIdToAdIds = new Map<string, string[]>();
+
+  for (const ad of adsList) {
+    out[ad.ad_id] = { adName: ad.ad_name };
+    if (ad.video_id) {
+      const list = videoIdToAdIds.get(ad.video_id) ?? [];
+      list.push(ad.ad_id);
+      videoIdToAdIds.set(ad.video_id, list);
+    } else if (ad.tiktok_item_id) {
+      const list = itemIdToAdIds.get(ad.tiktok_item_id) ?? [];
+      list.push(ad.ad_id);
+      itemIdToAdIds.set(ad.tiktok_item_id, list);
+    }
+  }
+
+  // Step 2a: upload ads → /file/video/ad/info/ for video_cover_url
+  if (videoIdToAdIds.size > 0) {
+    const covers = await fetchVideoCovers(env, [...videoIdToAdIds.keys()]);
+    for (const v of covers) {
+      const ids = videoIdToAdIds.get(v.video_id) ?? [];
+      for (const adId of ids) {
+        out[adId] = { ...out[adId], thumbnailUrl: v.video_cover_url };
+      }
+    }
+  }
+
+  // Step 2b: Spark Ads → TikTok public oEmbed for thumbnail + preview URL
+  // Sequential rather than parallel — oEmbed is a public service, don't hammer
+  // it; Natal's top-3-by-spend + top-3-by-roas is at most 6 calls per platform.
+  for (const [itemId, ids] of itemIdToAdIds) {
+    const oembed = await fetchSparkAdOEmbed(itemId);
+    if (!oembed) continue;
+    for (const adId of ids) {
+      out[adId] = {
+        ...out[adId],
+        thumbnailUrl: oembed.thumbnail_url,
+        previewUrl: oembed.preview_url,
+      };
+    }
+  }
+
+  return out;
+}
+
+async function fetchAdsMeta(env: TikTokEnv, adIds: string[]): Promise<TikTokAdMeta[]> {
+  const adFilter = encodeURIComponent(JSON.stringify({ ad_ids: adIds }));
+  const adFields = encodeURIComponent(
+    JSON.stringify(["ad_id", "ad_name", "video_id", "tiktok_item_id"]),
+  );
+  const url =
+    `${TIKTOK_API}/ad/get/?advertiser_id=${env.advertiserId}` +
+    `&filtering=${adFilter}&fields=${adFields}&page_size=100`;
+  try {
+    const res = await fetch(url, { headers: { "Access-Token": env.token } });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      code: number;
+      message?: string;
+      data?: { list?: TikTokAdMeta[] };
+    };
+    if (json.code !== 0) {
+      console.error(`[tiktok] /ad/get/ code=${json.code}: ${json.message}`);
+      return [];
+    }
+    return json.data?.list ?? [];
+  } catch (err) {
+    console.error(`[tiktok] /ad/get/ exception:`, err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+async function fetchVideoCovers(
+  env: TikTokEnv,
+  videoIds: string[],
+): Promise<{ video_id: string; video_cover_url?: string }[]> {
+  const param = encodeURIComponent(JSON.stringify(videoIds));
+  const url = `${TIKTOK_API}/file/video/ad/info/?advertiser_id=${env.advertiserId}&video_ids=${param}`;
+  try {
+    const res = await fetch(url, { headers: { "Access-Token": env.token } });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      code: number;
+      message?: string;
+      data?: { list?: { video_id: string; video_cover_url?: string }[] };
+    };
+    if (json.code !== 0) {
+      console.error(
+        `[tiktok] /file/video/ad/info/ code=${json.code}: ${json.message}`,
+      );
+      return [];
+    }
+    return json.data?.list ?? [];
+  } catch (err) {
+    console.error(
+      `[tiktok] /file/video/ad/info/ exception:`,
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
+}
+
+/**
+ * TikTok's public oEmbed endpoint. Takes any URL of shape
+ * https://www.tiktok.com/@anyusername/video/{tiktok_item_id} and returns the
+ * actual thumbnail + author handle, even if the username is wrong (TikTok
+ * resolves by item_id internally). No auth required, no scope needed.
+ */
+async function fetchSparkAdOEmbed(
+  itemId: string,
+): Promise<{ thumbnail_url?: string; preview_url?: string } | null> {
+  // Placeholder username — TikTok auto-corrects via item_id
+  const target = `https://www.tiktok.com/@unknown/video/${itemId}`;
+  const url = `https://www.tiktok.com/oembed?url=${encodeURIComponent(target)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      thumbnail_url?: string;
+      author_unique_id?: string;
+    };
+    const handle = json.author_unique_id;
+    return {
+      thumbnail_url: json.thumbnail_url,
+      preview_url: handle ? `https://www.tiktok.com/@${handle}/video/${itemId}` : undefined,
+    };
+  } catch (err) {
+    console.error(
+      `[tiktok] oEmbed lookup failed for item ${itemId}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }

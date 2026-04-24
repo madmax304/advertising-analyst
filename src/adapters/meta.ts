@@ -4,7 +4,11 @@ import { EVENT_MAP, REVENUE_MAP } from "../events/eventMap.js";
 const GRAPH_API = "https://graph.facebook.com/v20.0";
 const ATTRIBUTION_LABEL = "7-day click";
 
-export type CreativeEnrichment = { thumbnailUrl?: string; previewUrl?: string };
+export type CreativeEnrichment = {
+  thumbnailUrl?: string;
+  previewUrl?: string;
+  adName?: string; // optional override (e.g. when reporting metric is caption-based)
+};
 
 type MetaAction = { action_type: string; value: string };
 type MetaInsightRow = {

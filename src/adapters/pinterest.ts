@@ -28,7 +28,11 @@ type CampaignMeta = { id: string; name: string };
 
 type PinterestEnv = { token: string; adAccount: string };
 
-export type CreativeEnrichment = { thumbnailUrl?: string; previewUrl?: string };
+export type CreativeEnrichment = {
+  thumbnailUrl?: string;
+  previewUrl?: string;
+  adName?: string; // optional override (kept consistent with other adapters)
+};
 
 // Module-level cache of adId → pin_id, populated by listAllAds during the main
 // pull. Used by fetchThumbnails without re-hitting /ads.

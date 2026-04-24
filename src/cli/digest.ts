@@ -7,7 +7,10 @@ import {
   fetchCreativeMetrics as fetchMeta,
   fetchThumbnails as fetchMetaThumbnails,
 } from "../adapters/meta.js";
-import { fetchCreativeMetrics as fetchTikTok } from "../adapters/tiktok.js";
+import {
+  fetchCreativeMetrics as fetchTikTok,
+  fetchThumbnails as fetchTikTokThumbnails,
+} from "../adapters/tiktok.js";
 import { summarize } from "../analyst/summarize.js";
 import { rankCreatives, type RankedCreative } from "../analyst/rankCreatives.js";
 import { buildDigestBlocks, postDigest, type PlatformSection } from "../slack/digest.js";
@@ -41,15 +44,19 @@ function daysAgoInTz(daysAgo: number, tz: string): string {
 }
 
 type AdapterFn = (range: { start: string; end: string }) => Promise<CreativeMetrics[]>;
-type ThumbFn = (adIds: string[]) => Promise<Record<string, { thumbnailUrl?: string; previewUrl?: string }>>;
+type ThumbFn = (
+  adIds: string[],
+) => Promise<Record<string, { thumbnailUrl?: string; previewUrl?: string; adName?: string }>>;
 
 const ADAPTERS: Partial<
   Record<Platform, { fetch: AdapterFn; window: string; fetchThumbnails?: ThumbFn }>
 > = {
   meta: { fetch: fetchMeta, window: "7-day click", fetchThumbnails: fetchMetaThumbnails },
-  // TikTok's current OAuth scope doesn't include /ad/get/, /creative/* — all
-  // three return 40001 permission errors. Text-only until we widen the scope.
-  tiktok: { fetch: fetchTikTok, window: "7-day click / 1-day view" },
+  tiktok: {
+    fetch: fetchTikTok,
+    window: "7-day click / 1-day view",
+    fetchThumbnails: fetchTikTokThumbnails,
+  },
   pinterest: {
     fetch: fetchPinterest,
     window: "30-day click",
@@ -70,7 +77,10 @@ async function enrichLists(
   const allAdIds = [...new Set(lists.flatMap((list) => list.map((c) => c.adId)))];
   if (allAdIds.length === 0) return lists;
 
-  let enrichment: Record<string, { thumbnailUrl?: string; previewUrl?: string }> = {};
+  let enrichment: Record<
+    string,
+    { thumbnailUrl?: string; previewUrl?: string; adName?: string }
+  > = {};
   try {
     enrichment = await fetchThumbnails(allAdIds);
   } catch (err) {
@@ -84,6 +94,10 @@ async function enrichLists(
   return lists.map((list) =>
     list.map((c) => ({
       ...c,
+      // adName overridden only when enrichment provides one (TikTok does this
+      // because reporting metric is caption-based; Meta + Pinterest leave
+      // adName untouched since their reporting names are already real).
+      adName: enrichment[c.adId]?.adName ?? c.adName,
       thumbnailUrl: enrichment[c.adId]?.thumbnailUrl,
       previewUrl: enrichment[c.adId]?.previewUrl,
     })),
