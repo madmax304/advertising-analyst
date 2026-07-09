@@ -5,5 +5,8 @@ dist
 *.log
 .DS_Store
 
+# Scratch file that has held live API secrets pasted during token rotations
+clipboard.json
+
 # Per-machine Claude Code overrides — shared permissions go in settings.json
 .claude/settings.local.json

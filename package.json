@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "digest": "tsx src/cli/digest.ts",
+    "digest:dry": "DIGEST_DRY_RUN=1 tsx src/cli/digest.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },

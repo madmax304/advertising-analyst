@@ -26,16 +26,18 @@ Most urgent. 60-day lifespan means you rotate every ~55 days to stay ahead.
 ### Rotation steps
 
 1. Go to [Graph API Explorer](https://developers.facebook.com/tools/explorer/).
-2. Select the Meta app that owns the token. App ID is whichever you configured when setting up (check transcript or Business Manager — it's separate from the Pinterest app).
-3. **User or Page** → User Access Token.
-4. **Permissions** → add `ads_read` and `read_insights`. Click Generate Access Token.
+2. Select the Meta app that owns the token: **"KPI Pulse"** — **App ID `527408709796464`** (Mode: In development · Business: Natal). It's shared from a separate project, so look for the name *KPI Pulse* in the Graph Explorer app dropdown — it's separate from the Pinterest and TikTok apps. Its App Secret lives in `.env` as `META_APP_SECRET`.
+3. **Token type: User.** In the right-hand panel there's a "User or Page" dropdown — select **User Token** (the default). Do NOT pick a Page token; the Marketing API insights pull is account-level and a Page token won't reach `/act_.../insights`.
+4. **Permissions** → add **`ads_read`** (this is the one that matters — it authorizes the account insights pull) and `read_insights` (harmless to include; Graph Explorer may drop it since it's a Page-insights scope — that's fine, `ads_read` is sufficient). Click Generate Access Token.
 5. Complete the Facebook auth dialog. Copy the generated token (short-lived, ~1h TTL).
-6. Exchange for a 60-day long-lived token in terminal:
+   - Sanity check the token before exchanging: it should come back with scope `ads_read`. Verify with
+     `curl -s "https://graph.facebook.com/v20.0/me?access_token=SHORT_LIVED_TOKEN"` → expect your name + ID.
+6. Exchange for a 60-day long-lived token in terminal (reads app ID + secret from `.env`, so nothing to paste but the short-lived token):
    ```bash
-   curl -G "https://graph.facebook.com/v20.0/oauth/access_token" \
+   source .env && curl -G "https://graph.facebook.com/v20.0/oauth/access_token" \
      --data-urlencode "grant_type=fb_exchange_token" \
-     --data-urlencode "client_id=YOUR_APP_ID" \
-     --data-urlencode "client_secret=YOUR_APP_SECRET" \
+     --data-urlencode "client_id=$META_APP_ID" \
+     --data-urlencode "client_secret=$META_APP_SECRET" \
      --data-urlencode "fb_exchange_token=SHORT_LIVED_TOKEN"
    ```
 7. Copy `access_token` from response into `.env` as `META_ACCESS_TOKEN=`.
@@ -129,9 +131,28 @@ Update `SLACK_WEBHOOK_URL` in `.env` after rotation.
 
 ---
 
+## Testing without posting to Slack (dry run)
+
+Default to this whenever you touch tokens or code — no more testing live in the channel.
+
+```bash
+npm run digest:dry              # = DIGEST_DRY_RUN=1 npm run digest
+npm run --silent digest:dry     # add --silent when piping/copying the JSON (drops npm's 2-line banner)
+```
+
+This runs the full pipeline (real API pulls for every platform) but prints the Slack Block Kit JSON to stdout **instead of posting**. What to check:
+
+- **No `[digest] <platform> failed:` lines** on stderr — every platform section pulled cleanly.
+- **Scan the JSON** for each platform's summary line (e.g. `── Meta (7-day click) ──`) and confirm spend/ROAS look non-zero and sane.
+- **Preview the actual rendering** (optional): copy the JSON `blocks` array into Slack's [Block Kit Builder](https://app.slack.com/block-kit-builder) to see exactly how it'll look — thumbnails, links, layout — before any real post.
+
+Only once the dry run looks right, run `npm run digest` to post for real.
+
+---
+
 ## General tips
 
-- **Always test after rotating.** Run `DIGEST_DRY_RUN=1 npm run digest` and check the relevant platform's section before closing the laptop.
+- **Always dry-run after rotating.** Run `npm run digest:dry` (see above) and check the relevant platform's section before closing the laptop. Only post live once it looks right.
 - **Don't commit `.env`.** The `.gitignore` covers it, but double-check after any `git status` shows untracked files.
 - **Rotate any secret pasted into a chat transcript** after you're done. Chat transcripts may persist in ways you don't expect.
 - **The scheduled task runs at 8am Pacific daily** on the Mac Studio. Mac must be awake. Task lives at `~/.claude/scheduled-tasks/media-digest/SKILL.md`.
