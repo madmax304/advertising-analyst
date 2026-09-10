@@ -223,9 +223,9 @@ export async function checkAll(): Promise<TokenHealth[]> {
  */
 export async function renewTokens(): Promise<string[]> {
   const notes: string[] = [];
-  // Pinterest only. Meta rotation is owned by metaAuth.ts (`npm run meta:token`);
-  // once that lands on main, add its ensureFreshMetaToken() to this list so the
-  // digest preflight renews both.
+  // Pinterest only, and deliberately so: Meta rolls inside its own adapter
+  // (ensureFreshMetaToken() at the top of every Meta pull), so adding it here
+  // would exchange the token twice per run.
   for (const [name, ensure] of [["pinterest", pinterestAuth.ensureFreshToken]] as const) {
     try {
       const r = await ensure();

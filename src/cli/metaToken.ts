@@ -6,7 +6,7 @@ import {
   exchangeForLongLived,
   type MetaTokenInfo,
 } from "../adapters/metaAuth.js";
-import { updateEnvFile } from "../adapters/envFile.js";
+import { updateEnvFile } from "../adapters/tokenStore.js";
 
 /**
  * Meta token management. Deliberately never prints a token value — secrets

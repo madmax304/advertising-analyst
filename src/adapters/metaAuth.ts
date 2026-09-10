@@ -1,4 +1,4 @@
-import { updateEnvFile } from "./envFile.js";
+import { assertWritable, updateEnvFile } from "./tokenStore.js";
 
 const GRAPH_API = "https://graph.facebook.com/v20.0";
 
@@ -100,6 +100,9 @@ export async function exchangeForLongLived(
   currentToken: string,
 ): Promise<{ token: string; before: MetaTokenInfo; after: MetaTokenInfo; extended: boolean }> {
   const { appId, appSecret } = readAppCreds();
+  // Before the exchange, not after — a token we can't write down is a token
+  // we've lost. See tokenStore.assertWritable().
+  assertWritable("exchange the Meta token");
   const before = await inspectToken(currentToken);
 
   const params = new URLSearchParams({
