@@ -14,7 +14,7 @@ rotates anything.
 
 | Platform | Token location (`.env` key) | TTL | Auto-renewed? |
 |---|---|---|---|
-| Meta | `META_ACCESS_TOKEN` | 60 days | **Yes** — rolled at <14d left via `fb_exchange_token` |
+| Meta | `META_ACCESS_TOKEN` | 60 days | **Yes** — `npm run meta:token refresh` (`fb_exchange_token`) |
 | TikTok | `TIKTOK_ACCESS_TOKEN` | 1 year | No — monitored only (no refresh_token captured) |
 | Pinterest | `PINTEREST_ACCESS_TOKEN` | 30 days | **Yes** — renewed at <7d left, plus 401 fallback |
 | Slack webhook | `SLACK_WEBHOOK_URL` | Never expires | N/A |
@@ -27,9 +27,14 @@ credentials by failing on them. Renewal is never fatal — a platform that can't
 be renewed still gets its pull attempted and renders as an error section.
 
 ```bash
-npm run tokens          # status only, no rotation
-npm run tokens:renew    # renew anything near expiry, then show status
+npm run tokens            # status for all three platforms, no rotation
+npm run tokens:renew      # renew what's near expiry, then show status
+npm run meta:token        # Meta-specific status / seed / refresh
 ```
+
+`npm run tokens` reads every platform (including Meta) but only *rotates*
+Pinterest; Meta rotation lives in `meta:token` so the two don't duplicate
+each other.
 
 **Two things software cannot fix**, both needing a one-time re-auth:
 
@@ -57,29 +62,30 @@ loudly with nothing spent, instead of quietly stranding a rotated token.
 
 ## Meta (ACCESS_TOKEN, ~60 days, AUTO-RENEWED)
 
-The digest rolls this automatically once it's under 14 days left, via
-`fb_exchange_token` (see [`src/adapters/metaAuth.ts`](src/adapters/metaAuth.ts)).
-Two caveats worth knowing:
+Rolled via `fb_exchange_token` by
+[`src/adapters/metaAuth.ts`](src/adapters/metaAuth.ts) / `npm run meta:token`.
+Three things worth knowing:
 
-- **It cannot revive an already-expired token.** If the digest doesn't run for a
-  few weeks and the token lapses, the steps below are the only way back.
-- **Meta doesn't always extend.** Re-exchange usually returns a fresh 60-day
-  expiry, but not guaranteed; the roll logs `expiry <before> -> <after>` so you
-  can see what actually happened rather than assume.
-
-The permanent fix is a System User token (never expires) — see below.
+- **It cannot revive an already-expired token.** If the token lapses, the steps
+  below are the only way back. Roll well before expiry.
+- **Meta doesn't always extend.** Re-exchanging an already-long-lived token
+  usually returns a fresh 60-day expiry, but isn't guaranteed — especially for a
+  **USER** token, which is what this account currently uses (not the System User
+  token `project-plan.md` claims). `npm run meta:token refresh` reports whether
+  the expiry actually moved instead of assuming it did.
+- **The permanent fix is a System User token**, which never expires — see below.
 
 ### Rotation steps (only when it has fully expired)
 
-Steps 1-5 below get you a short-lived token; then instead of the manual curl
-exchange, run:
+Steps 1-5 below get you a short-lived token. Then, instead of the manual curl
+exchange:
 
 ```bash
-npm run tokens:seed:meta -- <short-lived-token>
+pbpaste | npm run meta:token seed
 ```
 
-That exchanges it for a 60-day token, writes it to `.env`, records the expiry,
-and warns if `ads_read` is missing. From then on the digest keeps it alive.
+Piping keeps the token out of shell history and off the screen — a secret that
+lands in a terminal transcript has to be rotated again.
 
 ### Symptoms of expiry
 - Digest's Meta section shows `:warning: Pull failed: OAuthException` or `code 190`
@@ -112,8 +118,10 @@ If Business Manager access is ever unblocked: generate a System User token inste
 
 ### ~~Future fix: auto-roll via `fb_exchange_token`~~ — done (2026-09-10)
 
-Implemented in [`src/adapters/metaAuth.ts`](src/adapters/metaAuth.ts); the digest
-preflight calls it every run.
+Implemented in [`src/adapters/metaAuth.ts`](src/adapters/metaAuth.ts). **Still to
+wire:** add `ensureFreshMetaToken()` to `renewTokens()` in
+[`src/cli/tokens.ts`](src/cli/tokens.ts) so the digest preflight rolls Meta too —
+it currently renews Pinterest only.
 
 ---
 

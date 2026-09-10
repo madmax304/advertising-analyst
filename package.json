@@ -11,7 +11,6 @@
     "typecheck": "tsc --noEmit",
     "tokens": "tsx src/cli/tokens.ts",
     "tokens:renew": "tsx src/cli/tokens.ts renew",
-    "tokens:seed:meta": "tsx src/cli/tokens.ts seed:meta",
     "tokens:seed:pinterest": "tsx src/cli/tokens.ts seed:pinterest",
     "tokens:authurl": "tsx src/cli/tokens.ts authurl"
   },

@@ -2,15 +2,20 @@ import "dotenv/config";
 import { stdin } from "node:process";
 import { daysUntil, ENV_FILE } from "../adapters/tokenStore.js";
 import * as pinterestAuth from "../adapters/pinterestAuth.js";
-import * as metaAuth from "../adapters/metaAuth.js";
 import type { Platform } from "../types.js";
 
 /**
- * Token health + renewal for every platform.
+ * Token health + renewal.
  *
- *   npm run tokens               status table (read-only, no rotation)
- *   npm run tokens:renew         renew anything close to expiry
- *   npm run tokens:seed:meta X   seed Meta from a short-lived Graph Explorer token
+ *   npm run tokens                 status table (read-only, no rotation)
+ *   npm run tokens:renew           renew anything close to expiry
+ *   npm run tokens:authurl         Pinterest re-auth URL, all scopes
+ *   pbpaste | npm run tokens:seed:pinterest
+ *
+ * Scope note: Meta *rotation* deliberately lives in `src/adapters/metaAuth.ts`
+ * and `npm run meta:token` — this module only READS Meta's token state, so the
+ * two don't duplicate each other. Pinterest rotation lives here because it is
+ * inseparable from the scope handling in pinterestAuth.ts.
  *
  * The digest calls renewTokens() as a preflight, so in normal operation this
  * CLI is only for humans who want to look.
@@ -86,9 +91,35 @@ async function checkPinterest(): Promise<TokenHealth> {
   };
 }
 
+type MetaDebugToken = {
+  is_valid: boolean;
+  expires_at?: number; // unix seconds; 0 means "never"
+  scopes?: string[];
+  type?: string;
+};
+
+/** Read-only: ask Meta about its own token rather than guessing from .env. */
+async function inspectMetaToken(): Promise<MetaDebugToken> {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  const input = process.env.META_ACCESS_TOKEN;
+  if (!appId || !appSecret) throw new Error("META_APP_ID / META_APP_SECRET not set");
+  if (!input) throw new Error("META_ACCESS_TOKEN not set");
+
+  const url = new URL(`${GRAPH}/debug_token`);
+  url.searchParams.set("input_token", input);
+  url.searchParams.set("access_token", `${appId}|${appSecret}`);
+  const res = await fetch(url);
+  const body = (await res.json()) as { data?: MetaDebugToken; error?: { message: string } };
+  if (!res.ok || body.error) {
+    throw new Error(`Meta debug_token failed: ${body.error?.message ?? res.status}`);
+  }
+  return body.data ?? { is_valid: false };
+}
+
 async function checkMeta(): Promise<TokenHealth> {
   try {
-    const info = await metaAuth.inspectToken();
+    const info = await inspectMetaToken();
     const daysLeft = info.expires_at
       ? (info.expires_at * 1000 - Date.now()) / 86_400_000
       : undefined;
@@ -111,18 +142,24 @@ async function checkMeta(): Promise<TokenHealth> {
         needsManualAuth: true,
       };
     }
+    // A USER token has to be rolled every 60d; a SYSTEM_USER token never expires.
+    const kind = info.type === "SYSTEM_USER" ? "system-user" : "user";
     return {
       platform: "meta",
       ok: true,
       daysLeft,
-      detail: daysLeft === undefined ? "never expires" : `${daysLeft.toFixed(0)}d left`,
+      detail:
+        daysLeft === undefined
+          ? `never expires (${kind})`
+          : `${daysLeft.toFixed(0)}d left (${kind} token)`,
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       platform: "meta",
       ok: false,
-      detail: err instanceof Error ? err.message : String(err),
-      needsManualAuth: metaAuth.isAuthError(err),
+      detail: message,
+      needsManualAuth: /OAuthException|code"?\s*:?\s*190|expired/i.test(message),
     };
   }
 }
@@ -186,10 +223,10 @@ export async function checkAll(): Promise<TokenHealth[]> {
  */
 export async function renewTokens(): Promise<string[]> {
   const notes: string[] = [];
-  for (const [name, ensure] of [
-    ["pinterest", pinterestAuth.ensureFreshToken],
-    ["meta", metaAuth.ensureFreshToken],
-  ] as const) {
+  // Pinterest only. Meta rotation is owned by metaAuth.ts (`npm run meta:token`);
+  // once that lands on main, add its ensureFreshMetaToken() to this list so the
+  // digest preflight renews both.
+  for (const [name, ensure] of [["pinterest", pinterestAuth.ensureFreshToken]] as const) {
     try {
       const r = await ensure();
       notes.push(`${name}: ${r.renewed ? `renewed (was ${r.reason})` : `no action (${r.reason})`}`);
@@ -206,7 +243,7 @@ function pad(s: string, n: number): string {
 
 /**
  * Read a secret from stdin so it never lands in shell history or a process
- * list. `pbpaste | npm run tokens:seed:meta` is the smooth path. Passing the
+ * list. `pbpaste | npm run tokens:seed:pinterest` is the smooth path. Passing the
  * value as an argv argument still works but is discouraged for exactly that
  * reason — argv is visible to `ps` and gets written to ~/.zsh_history.
  */
@@ -229,13 +266,6 @@ async function main(): Promise<void> {
       `[tokens] note: a secret passed as an argument is recorded in shell history — ` +
         `\`pbpaste | npm run tokens:${cmd}\` avoids that.`,
     );
-  }
-
-  if (cmd === "seed:meta") {
-    if (!arg) throw new Error("usage: pbpaste | npm run tokens:seed:meta");
-    await metaAuth.seedFromShortLivedToken(arg);
-    console.log("Meta token seeded. Re-run `npm run tokens` to confirm.");
-    return;
   }
 
   if (cmd === "seed:pinterest") {
@@ -280,7 +310,7 @@ async function main(): Promise<void> {
         console.log("  meta — expired past the point fb_exchange_token can revive:");
         console.log("    1. open: https://developers.facebook.com/tools/explorer/");
         console.log('    2. app "KPI Pulse", User Token, permission ads_read, Generate');
-        console.log("    3. npm run tokens:seed:meta -- <short-lived-token>\n");
+        console.log("    3. pbpaste | npm run meta:token seed\n");
       } else {
         console.log(`  ${m.platform} — see TOKEN_ROTATION.md\n`);
       }
