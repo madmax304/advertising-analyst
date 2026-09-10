@@ -1,6 +1,6 @@
 import type { CreativeMetrics, DateRange } from "../types.js";
 import { EVENT_MAP } from "../events/eventMap.js";
-import { PinterestAuthError, refreshAccessToken } from "./pinterestAuth.js";
+import { PinterestAuthError, isScopeError, refreshAccessToken } from "./pinterestAuth.js";
 
 const PINTEREST_API = "https://api.pinterest.com/v5";
 const ATTRIBUTION_LABEL = "30-day click";
@@ -46,18 +46,31 @@ function readEnv(): PinterestEnv {
   return { token, adAccount };
 }
 
+/** Non-401 HTTP failure, carrying the status so callers can treat 404 (pin gone)
+ *  differently from a genuine error. */
+export class PinterestHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "PinterestHttpError";
+  }
+}
+
 async function pinterestGet<T>(path: string, token: string, query: Record<string, string>): Promise<T> {
   const url = new URL(`${PINTEREST_API}${path}`);
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 401) {
-    // Token expired / revoked. The top-level caller catches this specific type
-    // and refreshes + retries once.
-    throw new PinterestAuthError(`Pinterest GET ${path} auth failed (401)`);
-  }
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Pinterest GET ${path} failed ${res.status}: ${body.slice(0, 400)}`);
+    // Always read the body — for 401 it is the ONLY thing distinguishing a dead
+    // token from a token missing a scope, and dropping it made a scope problem
+    // look like an expiry for months.
+    const detail = (await res.text()).slice(0, 400);
+    if (res.status === 401) {
+      throw new PinterestAuthError(`Pinterest GET ${path} auth failed (401): ${detail}`);
+    }
+    throw new PinterestHttpError(`Pinterest GET ${path} failed ${res.status}: ${detail}`, res.status);
   }
   return (await res.json()) as T;
 }
@@ -157,6 +170,13 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
   try {
     return await doFetchCreativeMetrics(range);
   } catch (err) {
+    if (err instanceof PinterestAuthError && isScopeError(err)) {
+      // Refreshing cannot add a scope the grant does not have — surface it
+      // instead of burning a rotation on a retry that will fail identically.
+      throw new Error(
+        `Pinterest token is missing required scopes — re-auth needed, see TOKEN_ROTATION.md. ${err.message}`,
+      );
+    }
     if (err instanceof PinterestAuthError) {
       console.error("[pinterest] access token rejected; refreshing and retrying once");
       await refreshAccessToken();
@@ -204,31 +224,55 @@ async function doFetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics
   });
 }
 
+type Pin = {
+  id: string;
+  media?: { images?: Record<string, { url: string; width?: number; height?: number }> };
+};
+
+function getPin(pinId: string, token: string, adAccount: string): Promise<Pin> {
+  return pinterestGet<Pin>(`/pins/${pinId}`, token, { ad_account_id: adAccount });
+}
+
 /**
  * For the given ad IDs, fetch the underlying Pinterest pin's image URL.
  * Uses adIdToPinId populated during listAllAds — so this must be called
  * AFTER fetchCreativeMetrics has run in the same process.
  * Non-fatal on errors: returns empty for ads we can't enrich.
+ *
+ * Note all diagnostics go to stderr — stdout carries the dry-run Block Kit JSON.
  */
 export async function fetchThumbnails(
   adIds: string[],
 ): Promise<Record<string, CreativeEnrichment>> {
   if (adIds.length === 0) return {};
 
-  const token = process.env.PINTEREST_ACCESS_TOKEN;
+  let token = process.env.PINTEREST_ACCESS_TOKEN;
   const adAccount = process.env.PINTEREST_AD_ACCOUNT_ID;
   if (!token || !adAccount) return {};
 
   const out: Record<string, CreativeEnrichment> = {};
+  // Refresh at most once per invocation, no matter how many pins 401.
+  let refreshed = false;
 
   for (const adId of adIds) {
     const pinId = adIdToPinId[adId];
     if (!pinId) continue;
     try {
-      const pin = await pinterestGet<{
-        id: string;
-        media?: { images?: Record<string, { url: string; width?: number; height?: number }> };
-      }>(`/pins/${pinId}`, token, { ad_account_id: adAccount });
+      let pin: Pin;
+      try {
+        pin = await getPin(pinId, token, adAccount);
+      } catch (err) {
+        // Same refresh-and-retry-once the reporting path gets. This path used to
+        // have none, so an expired token here just logged and rendered text-only.
+        if (err instanceof PinterestAuthError && !isScopeError(err) && !refreshed) {
+          console.error("[pinterest] token rejected on pin read; refreshing and retrying once");
+          token = await refreshAccessToken();
+          refreshed = true;
+          pin = await getPin(pinId, token, adAccount);
+        } else {
+          throw err;
+        }
+      }
 
       // Pinterest returns multiple image sizes. Prefer medium-ish (600x, 400x)
       // over originals — Slack renders thumbnails ~75px anyway.
@@ -241,6 +285,25 @@ export async function fetchThumbnails(
         previewUrl: `https://www.pinterest.com/pin/${pinId}/`,
       };
     } catch (err) {
+      if (err instanceof PinterestAuthError && isScopeError(err)) {
+        // Not per-pin: every remaining pin fails identically. Say it once, loudly,
+        // with the fix, and stop hammering the API.
+        console.error(
+          `[pinterest] thumbnails unavailable — the access token lacks pins:read/boards:read. ` +
+            `Re-auth with the full scope set (see TOKEN_ROTATION.md); reporting is unaffected. ${
+              err instanceof Error ? err.message : err
+            }`,
+        );
+        break;
+      }
+      if (err instanceof PinterestHttpError && (err.status === 404 || err.status === 403)) {
+        // Genuinely per-pin: deleted pin, or one on a board this token can't see.
+        // Not an auth problem — don't dress it up as one.
+        console.error(
+          `[pinterest] debug: no thumbnail for ad ${adId} (pin ${pinId}): ${err.status} — pin deleted or not visible to this token`,
+        );
+        continue;
+      }
       console.error(
         `[pinterest] thumbnail fetch failed for ad ${adId} (pin ${pinId}):`,
         err instanceof Error ? err.message : err,

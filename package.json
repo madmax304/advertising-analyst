@@ -2,13 +2,18 @@
   "name": "advertising-analyst",
   "version": "0.1.0",
   "private": true,
-  "description": "Daily media buying digest — Meta, TikTok, Pinterest → Slack.",
+  "description": "Daily media buying digest \u2014 Meta, TikTok, Pinterest \u2192 Slack.",
   "type": "module",
   "scripts": {
     "digest": "tsx src/cli/digest.ts",
     "digest:dry": "DIGEST_DRY_RUN=1 tsx src/cli/digest.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "tokens": "tsx src/cli/tokens.ts",
+    "tokens:renew": "tsx src/cli/tokens.ts renew",
+    "tokens:seed:meta": "tsx src/cli/tokens.ts seed:meta",
+    "tokens:seed:pinterest": "tsx src/cli/tokens.ts seed:pinterest",
+    "tokens:authurl": "tsx src/cli/tokens.ts authurl"
   },
   "dependencies": {
     "@slack/webhook": "^7.0.5",

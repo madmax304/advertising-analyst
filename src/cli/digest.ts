@@ -14,6 +14,7 @@ import {
 import { summarize } from "../analyst/summarize.js";
 import { rankCreatives, type RankedCreative } from "../analyst/rankCreatives.js";
 import { buildDigestBlocks, postDigest, type PlatformSection } from "../slack/digest.js";
+import { renewTokens } from "./tokens.js";
 import type { CreativeMetrics, Platform } from "../types.js";
 
 const TIMEZONE = "America/Los_Angeles";
@@ -156,6 +157,16 @@ async function main(): Promise<void> {
   const end = daysAgoInTz(1, TIMEZONE);
   const start = daysAgoInTz(WINDOW_DAYS, TIMEZONE);
   const range = { start, end };
+
+  // Preflight: renew any token near expiry BEFORE pulling, so the digest stops
+  // discovering dead credentials by failing on them. Never fatal — a platform
+  // that can't be renewed still gets its pull attempted and, if it fails,
+  // renders as an error section rather than taking the whole run down.
+  try {
+    for (const note of await renewTokens()) console.error(`[tokens] ${note}`);
+  } catch (err) {
+    console.error("[tokens] preflight skipped:", err instanceof Error ? err.message : err);
+  }
 
   // Section order in the Slack digest: Meta → TikTok → Pinterest.
   // Any platform missing creds in .env renders as an error section and doesn't
