@@ -1,5 +1,6 @@
 import type { CreativeMetrics, DateRange } from "../types.js";
 import { EVENT_MAP, REVENUE_MAP } from "../events/eventMap.js";
+import { ensureFreshMetaToken } from "./metaAuth.js";
 
 const GRAPH_API = "https://graph.facebook.com/v20.0";
 const ATTRIBUTION_LABEL = "7-day click";
@@ -63,9 +64,13 @@ function toNum(v: string | undefined): number {
 
 export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics[]> {
   const env = readEnv();
+  // Proactively roll the token if it's near expiry, and fail loudly with a
+  // pointer to the reseed flow if it's already dead. Also refreshes
+  // process.env, so the later fetchThumbnails() call picks up the new token.
+  const token = await ensureFreshMetaToken();
 
   const params = new URLSearchParams({
-    access_token: env.token,
+    access_token: token,
     level: "ad",
     time_range: JSON.stringify({ since: range.start, until: range.end }),
     time_increment: "1",

@@ -6,7 +6,7 @@ Where tokens live, when they die, how to rotate them. Keep this up to date when 
 
 | Platform | Token location (`.env` key) | TTL | Auto-refresh? | Next action by |
 |---|---|---|---|---|
-| Meta | `META_ACCESS_TOKEN` | 60 days | No | **2026-06-15** |
+| Meta | `META_ACCESS_TOKEN` | 60 days | **Attempted** — digest auto-rolls under 7d left, but see caveat below | Seed once, then automatic |
 | TikTok | `TIKTOK_ACCESS_TOKEN` | 1 year | No (but possible) | 2027-04-17 |
 | Pinterest | `PINTEREST_ACCESS_TOKEN` | 30 days | **Yes** — auto-refresh on 401 | 2027-04-18 (refresh_token expires) |
 | Slack webhook | `SLACK_WEBHOOK_URL` | Never expires | N/A | Only if revoked |
@@ -15,15 +15,47 @@ Where tokens live, when they die, how to rotate them. Keep this up to date when 
 
 ---
 
-## Meta (ACCESS_TOKEN, ~60 days, manual)
+## Meta (ACCESS_TOKEN, ~60 days, auto-roll attempted)
 
-Most urgent. 60-day lifespan means you rotate every ~55 days to stay ahead.
+### Tooling (added 2026-09-10)
+
+```bash
+npm run meta:token            # status — valid? how many days left? which scopes?
+pbpaste | npm run meta:token seed   # short-lived → 60-day, writes .env (nothing echoed)
+npm run meta:token refresh    # force a long-lived → long-lived roll now
+```
+
+`src/adapters/metaAuth.ts` runs at the top of every Meta pull. It inspects the
+token via `/debug_token` and, when under **7 days** remain, tries a
+`fb_exchange_token` roll and persists the result to `.env`.
+
+**Caveat — this may be a no-op for user tokens.** Meta documents
+`fb_exchange_token` as the *short-lived → long-lived* swap. Re-exchanging an
+already-long-lived **user** token is not guaranteed to move the expiry; Meta has
+historically handed back a token carrying the original expiry. So the auto-roll
+measures the before/after expiry and logs
+`WARNING: auto-roll did not extend expiry` when it bought nothing — watch for
+that line rather than assuming you're covered. `npm run meta:token refresh`
+exits non-zero (code 2) in that case, which is the cheap way to find out.
+
+**If the auto-roll turns out to be a no-op, the durable fix is a System User
+token** (never expires) — see "Future fix" below. Per `project-plan.md` §5 this
+account originally used one, so it may just be a matter of regenerating it.
+
+**An expired token cannot be auto-rolled.** `fb_exchange_token` extends a *live*
+token; it can't resurrect a dead one. Once expired, you must reseed by hand.
 
 ### Symptoms of expiry
-- Digest's Meta section shows `:warning: Pull failed: OAuthException` or `code 190`
+- Digest's Meta section shows `:warning: Pull failed: Meta access token is invalid/expired`
 - Or silently shows `Spend: $0` across the board when Meta ads are known to be running
+- `npm run meta:token` reports `valid: NO`
 
 ### Rotation steps
+
+> Fast path: do steps 1–5 in the browser, copy the token, then run
+> `pbpaste | npm run meta:token seed` — it validates the scope, does the
+> exchange, and writes `.env` without the token touching your screen, your
+> shell history, or a chat transcript. Steps 6–8 below are the manual equivalent.
 
 1. Go to [Graph API Explorer](https://developers.facebook.com/tools/explorer/).
 2. Select the Meta app that owns the token: **"KPI Pulse"** — **App ID `527408709796464`** (Mode: In development · Business: Natal). It's shared from a separate project, so look for the name *KPI Pulse* in the Graph Explorer app dropdown — it's separate from the Pinterest and TikTok apps. Its App Secret lives in `.env` as `META_APP_SECRET`.
@@ -48,9 +80,11 @@ Most urgent. 60-day lifespan means you rotate every ~55 days to stay ahead.
 
 If Business Manager access is ever unblocked: generate a System User token instead of a user token. Never expires. See Meta's docs for "System User Token" setup.
 
-### Future fix: auto-roll via `fb_exchange_token`
+### ~~Future fix: auto-roll via `fb_exchange_token`~~ — built 2026-09-10
 
-Could add a Meta-side refresh module similar to `src/adapters/pinterestAuth.ts`. Call `fb_exchange_token` proactively at the start of each digest if the token is <7 days from expiry. Estimated effort: ~1 hour.
+Implemented in `src/adapters/metaAuth.ts`, wired into the Meta adapter. See
+"Tooling" above, including the caveat that this may not actually extend a user
+token — in which case the System User route above is the real answer.
 
 ---
 
