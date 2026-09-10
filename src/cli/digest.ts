@@ -15,6 +15,7 @@ import { summarize } from "../analyst/summarize.js";
 import { rankCreatives, type RankedCreative } from "../analyst/rankCreatives.js";
 import { buildDigestBlocks, postDigest, type PlatformSection } from "../slack/digest.js";
 import { renewTokens } from "./tokens.js";
+import { fetchObservedRevenue, type ObservedAttribution } from "../adapters/posthog.js";
 import type { CreativeMetrics, Platform } from "../types.js";
 
 const TIMEZONE = "America/Los_Angeles";
@@ -175,16 +176,36 @@ async function main(): Promise<void> {
 
   const sections = await Promise.all(platforms.map((p) => runPlatform(p, range)));
 
+  // Independently observed revenue. Never fatal: without PostHog configured, or
+  // if the query fails, the digest still renders the platform-claimed numbers.
+  let observed: ObservedAttribution | undefined;
+  try {
+    observed = await fetchObservedRevenue(range);
+    if (observed) {
+      const c = observed.coverage;
+      const pct = c.revenue > 0 ? ((c.joinableRevenue / c.revenue) * 100).toFixed(0) : "0";
+      console.error(
+        `[posthog] observed revenue for ${observed.networks.length} network(s); ` +
+          `${pct}% of booked revenue joined to a click (${observed.lookbackDays}d lookback)`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[posthog] observed revenue unavailable:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   const dryRun = process.env.DIGEST_DRY_RUN === "1";
   if (dryRun) {
-    const blocks = buildDigestBlocks(range, sections);
+    const blocks = buildDigestBlocks(range, sections, observed);
     console.log(
       JSON.stringify({ text: `7-Day Media Digest — ${start} to ${end}`, blocks }, null, 2),
     );
   } else {
     const webhookUrl = process.env.SLACK_WEBHOOK_URL;
     if (!webhookUrl) throw new Error("SLACK_WEBHOOK_URL not set (use DIGEST_DRY_RUN=1 to preview)");
-    await postDigest(webhookUrl, range, sections);
+    await postDigest(webhookUrl, range, sections, observed);
     console.error(`[digest] posted for ${start} to ${end}`);
   }
 

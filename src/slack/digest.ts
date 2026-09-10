@@ -3,6 +3,7 @@ import type { Platform, DateRange } from "../types.js";
 import type { Summary } from "../analyst/summarize.js";
 import type { RankedCreative } from "../analyst/rankCreatives.js";
 import { rollup } from "../analyst/rollup.js";
+import type { ObservedAttribution } from "../adapters/posthog.js";
 
 export type PlatformSection =
   | {
@@ -158,7 +159,7 @@ function rankedSubsection(
  *    isn't an accounting figure. We say so whenever more than one window is in
  *    the blend.
  */
-function rollupBlocks(sections: PlatformSection[]): SlackBlock[] {
+function rollupBlocks(sections: PlatformSection[], observed?: ObservedAttribution): SlackBlock[] {
   const r = rollup(sections);
   // Nothing pulled — the per-platform error sections already tell that story.
   if (r.networks.length === 0) return [];
@@ -223,7 +224,68 @@ function rollupBlocks(sections: PlatformSection[]): SlackBlock[] {
     text: { type: "mrkdwn", text: `*Network comparison:*\n\`\`\`\n${table}\n\`\`\`` },
   };
 
-  return [header, comparison];
+  const blocks = [header, comparison];
+  const observedBlock = observedBlocks(r.networks.map((n) => n.platform), observed, sections);
+  if (observedBlock) blocks.push(observedBlock);
+  return blocks;
+}
+
+/**
+ * Claimed vs observed, side by side.
+ *
+ * "Claimed" is each network grading its own homework. "Observed" is RevenueCat
+ * revenue joined to an ad click in PostHog. Neither is the truth: claimed is a
+ * ceiling (self-attributed, cross-device modelled, not deduped between
+ * networks), observed is a floor (only ~40% of booked revenue joins to any
+ * click at all). The honest reading is that reality sits between them — so we
+ * print the coverage rate right next to the numbers rather than letting the
+ * table imply more precision than exists.
+ */
+function observedBlocks(
+  platforms: Platform[],
+  observed: ObservedAttribution | undefined,
+  sections: PlatformSection[],
+): SlackBlock | undefined {
+  if (!observed || observed.networks.length === 0) return undefined;
+
+  const spendOf = (p: Platform): number => {
+    const s = sections.find((x) => x.ok && x.platform === p);
+    return s && s.ok ? s.summary.spend : 0;
+  };
+  const claimedRevenueOf = (p: Platform): number => {
+    const s = sections.find((x) => x.ok && x.platform === p);
+    return s && s.ok ? s.summary.revenue : 0;
+  };
+
+  const width = Math.max(...platforms.map((p) => PLATFORM_LABEL[p].length), 9);
+  const rows = platforms.map((p) => {
+    const o = observed.networks.find((n) => n.platform === p);
+    const spend = spendOf(p);
+    const claimed = claimedRevenueOf(p);
+    const obsNet = o?.netRevenue ?? 0;
+    const claimedRoas = spend > 0 ? claimed / spend : 0;
+    const obsRoas = spend > 0 ? obsNet / spend : 0;
+    return (
+      `${PLATFORM_LABEL[p].padEnd(width)}  ${usd(spend).padStart(9)}  ` +
+      `${ratio(claimedRoas).padStart(7)}  ${ratio(obsRoas).padStart(8)}`
+    );
+  });
+
+  const head = `${"Network".padEnd(width)}  ${"Spend".padStart(9)}  ${"Claimed".padStart(7)}  ${"Observed".padStart(8)}`;
+  const cov = observed.coverage;
+  const covPct = cov.revenue > 0 ? (cov.joinableRevenue / cov.revenue) * 100 : 0;
+
+  return {
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text:
+        `*Claimed vs observed ROAS:*\n\`\`\`\n${head}\n${rows.join("\n")}\n\`\`\`\n` +
+        `_Claimed = the network's own figure (a ceiling). Observed = RevenueCat revenue, ` +
+        `net of store fees, joined to an ad click within ${observed.lookbackDays}d (a floor: ` +
+        `only ${covPct.toFixed(0)}% of booked revenue joins to any click). Observed excludes renewals._`,
+    },
+  };
 }
 
 function formatDateShort(ymd: string): string {
@@ -237,7 +299,9 @@ function formatDateShort(ymd: string): string {
   });
 }
 
-export function buildDigestBlocks(range: DateRange, sections: PlatformSection[]): SlackBlock[] {
+export function buildDigestBlocks(range: DateRange, sections: PlatformSection[],
+  observed?: ObservedAttribution,
+): SlackBlock[] {
   const pretty = `${formatDateShort(range.start)} → ${formatDateShort(range.end)}`;
 
   const header: SlackBlock = {
@@ -245,15 +309,16 @@ export function buildDigestBlocks(range: DateRange, sections: PlatformSection[])
     text: { type: "plain_text", text: `📊 7-Day Media Digest — ${pretty}` },
   };
 
-  return [header, ...rollupBlocks(sections), ...sections.flatMap(sectionBlocks)];
+  return [header, ...rollupBlocks(sections, observed), ...sections.flatMap(sectionBlocks)];
 }
 
 export async function postDigest(
   webhookUrl: string,
   range: DateRange,
   sections: PlatformSection[],
+  observed?: ObservedAttribution,
 ): Promise<void> {
-  const blocks = buildDigestBlocks(range, sections);
+  const blocks = buildDigestBlocks(range, sections, observed);
   const webhook = new IncomingWebhook(webhookUrl);
   const fallbackText = `7-Day Media Digest — ${range.start} to ${range.end}`;
   // Cast: we build blocks with the open-ended SlackBlock shape; @slack/webhook
