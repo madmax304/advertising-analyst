@@ -2,6 +2,7 @@ import { IncomingWebhook } from "@slack/webhook";
 import type { Platform, DateRange } from "../types.js";
 import type { Summary } from "../analyst/summarize.js";
 import type { RankedCreative } from "../analyst/rankCreatives.js";
+import { rollup } from "../analyst/rollup.js";
 
 export type PlatformSection =
   | {
@@ -146,6 +147,78 @@ function rankedSubsection(
   return [header, ...body];
 }
 
+/**
+ * Cross-network roll-up, rendered above the per-platform sections.
+ *
+ * Two honesty rails, both deliberate:
+ *  - When a platform's pull failed, the blended totals silently omit its spend.
+ *    That's how a blended ROAS ends up looking great because the worst network
+ *    dropped out. So we name the missing platforms inline.
+ *  - The platforms report on different attribution windows, so summed revenue
+ *    isn't an accounting figure. We say so whenever more than one window is in
+ *    the blend.
+ */
+function rollupBlocks(sections: PlatformSection[]): SlackBlock[] {
+  const r = rollup(sections);
+  // Nothing pulled — the per-platform error sections already tell that story.
+  if (r.networks.length === 0) return [];
+
+  const { blended } = r;
+  const totalsLine1 =
+    `*Spend:* ${usd(blended.spend)}  |  ` +
+    `*Impr:* ${compact(blended.impressions)}  |  ` +
+    `*CPM:* ${usd(blended.cpm)}  |  ` +
+    `*CTR:* ${pct(blended.ctr)}  |  ` +
+    `*Purchases:* ${num(blended.purchases)}  |  ` +
+    `*Trials:* ${num(blended.trialStarts)}`;
+  const totalsLine2 =
+    `*ROAS:* ${ratio(blended.roas)}  |  ` +
+    `*CPA:* ${usdOrDash(blended.cpa)}  |  ` +
+    `*Cost/Trial:* ${usdOrDash(blended.cpTrial)}`;
+
+  const caveats: string[] = [];
+  if (r.excluded.length > 0) {
+    const names = r.excluded.map((e) => PLATFORM_LABEL[e.platform]).join(", ");
+    caveats.push(
+      `:warning: _Excludes ${names} (pull failed) — these totals are partial._`,
+    );
+  }
+  if (r.attributionWindows.length > 1) {
+    caveats.push(
+      `_Blends ${r.attributionWindows.length} attribution windows (${r.attributionWindows.join("; ")}). ` +
+        `Directional, not an accounting figure._`,
+    );
+  }
+
+  const header: SlackBlock = {
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: [`*── All Networks (blended) ──*`, totalsLine1, totalsLine2, ...caveats].join("\n"),
+    },
+  };
+
+  // Monospace so the columns actually line up in Slack.
+  const nameWidth = Math.max(...r.networks.map((n) => PLATFORM_LABEL[n.platform].length));
+  const table = r.networks
+    .map((n) => {
+      const label = PLATFORM_LABEL[n.platform].padEnd(nameWidth);
+      const spend = usd(n.summary.spend).padStart(9);
+      const share = `${(n.spendShare * 100).toFixed(0)}%`.padStart(4);
+      const roas = ratio(n.summary.roas).padStart(5);
+      const cpa = usdOrDash(n.summary.cpa).padStart(7);
+      return `${label}  ${spend}  ${share}   ROAS ${roas}   CPA ${cpa}`;
+    })
+    .join("\n");
+
+  const comparison: SlackBlock = {
+    type: "section",
+    text: { type: "mrkdwn", text: `*Network comparison:*\n\`\`\`\n${table}\n\`\`\`` },
+  };
+
+  return [header, comparison];
+}
+
 function formatDateShort(ymd: string): string {
   // "2026-04-19" → "Apr 19"
   const [y, m, d] = ymd.split("-").map((s) => Number(s));
@@ -165,7 +238,7 @@ export function buildDigestBlocks(range: DateRange, sections: PlatformSection[])
     text: { type: "plain_text", text: `📊 7-Day Media Digest — ${pretty}` },
   };
 
-  return [header, ...sections.flatMap(sectionBlocks)];
+  return [header, ...rollupBlocks(sections), ...sections.flatMap(sectionBlocks)];
 }
 
 export async function postDigest(
