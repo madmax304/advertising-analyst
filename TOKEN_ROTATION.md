@@ -2,14 +2,61 @@
 
 Where tokens live, when they die, how to rotate them. Keep this up to date when things change.
 
-## Quick status
+## Check status first
 
-| Platform | Token location (`.env` key) | TTL | Auto-refresh? | Next action by |
-|---|---|---|---|---|
-| Meta | `META_ACCESS_TOKEN` | 60 days | **Attempted** — digest auto-rolls under 7d left, but see caveat below | Seed once, then automatic |
-| TikTok | `TIKTOK_ACCESS_TOKEN` | 1 year | No (but possible) | 2027-04-17 |
-| Pinterest | `PINTEREST_ACCESS_TOKEN` | 30 days | **Yes** — auto-refresh on 401 | 2027-04-18 (refresh_token expires) |
-| Slack webhook | `SLACK_WEBHOOK_URL` | Never expires | N/A | Only if revoked |
+```bash
+npm run tokens
+```
+
+Shows every platform's token: valid or not, days left, scopes, and — when a
+human is genuinely needed — the exact commands to fix it. Read-only; it never
+rotates anything.
+
+| Platform | Token location (`.env` key) | TTL | Auto-renewed? |
+|---|---|---|---|
+| Meta | `META_ACCESS_TOKEN` | 60 days | **Attempted** — rolled under 7d left; see the user-token caveat below |
+| TikTok | `TIKTOK_ACCESS_TOKEN` | 1 year | No — monitored only (no refresh_token captured) |
+| Pinterest | `PINTEREST_ACCESS_TOKEN` | 30 days | **Yes** — renewed under 7d left, plus a 401 fallback |
+| Slack webhook | `SLACK_WEBHOOK_URL` | Never expires | N/A |
+
+## How renewal works
+
+Renewal lives in two places, deliberately:
+
+- **Meta** rolls inside its own adapter — `ensureFreshMetaToken()` runs at the
+  top of every Meta pull ([`src/adapters/metaAuth.ts`](src/adapters/metaAuth.ts)).
+- **Pinterest** renews in the digest preflight, before any platform is pulled
+  (`renewTokens()` in [`src/cli/tokens.ts`](src/cli/tokens.ts)), because its
+  renewal is inseparable from the scope handling in `pinterestAuth.ts`.
+
+Either way, the digest stops discovering dead credentials by failing on them.
+Renewal is never fatal — a platform that can't be renewed still gets its pull
+attempted and renders as an error section rather than taking the run down.
+
+```bash
+npm run tokens            # status for all three platforms, no rotation
+npm run tokens:renew      # renew what's near expiry, then show status
+npm run meta:token        # Meta-specific status / seed / refresh
+```
+
+**Two things software cannot fix**, both needing a one-time re-auth:
+
+- **A Meta token left to fully expire.** `fb_exchange_token` extends a *valid*
+  long-lived token; it cannot revive a dead one.
+- **A lost OAuth scope.** A refresh can never add a scope the grant doesn't
+  have. Only re-authorizing rebuilds the grant.
+
+`npm run tokens` prints the fix for each. After seeding once, both stay
+hands-off.
+
+### Where `.env` is found
+
+The auth modules resolve `.env` explicitly — `MEDIA_DIGEST_ENV_FILE`, else
+`DOTENV_CONFIG_PATH`, else the package root, else cwd — and **verify it's
+writable before exchanging anything**. This matters: providers rotate refresh
+tokens on exchange, so a write that fails *after* the exchange destroys the only
+copy of a live credential. Running from a git worktree (no `.env`) now fails
+loudly with nothing spent, instead of quietly stranding a rotated token.
 
 `.env` lives on the Mac Studio at `/Users/maxwellanderson/Documents/Claude/Projects/Advertising Analyst/.env`. It's gitignored — do not commit.
 
@@ -127,29 +174,55 @@ TikTok's OAuth response includes a `refresh_token`. Add a TikTok auth module mir
 
 Mostly hands-off. The digest auto-refreshes the access token on 401 using the `PINTEREST_REFRESH_TOKEN` in `.env`. See [`src/adapters/pinterestAuth.ts`](src/adapters/pinterestAuth.ts).
 
+### Scopes
+
+The token needs **`ads:read`, `pins:read`, `boards:read`, `user_accounts:read`**.
+Reporting only needs `ads:read`; the digest's creative thumbnails call
+`GET /pins/{id}`, which needs `pins:read` + `boards:read`.
+
+Pinterest returns **401 for a missing scope**, same status as a dead token — the
+response body is the only difference (`"Missing: ['boards:read', 'pins:read']"`).
+The adapter now includes that body in its error and refuses to "refresh" a scope
+error, since a refresh cannot add a scope the grant never had.
+
+> **Historical gotcha (fixed 2026-09-10).** `refreshAccessToken()` used to pass
+> `scope: "ads:read"` on the refresh call. An OAuth refresh that names a scope
+> *narrows* the new token to it, so the first auto-refresh after the April 2026
+> re-auth quietly dropped the three non-ads scopes. Metrics kept working;
+> thumbnails 401'd. The refresh no longer sends `scope`, which preserves the
+> grant's original scopes, and it logs the scopes it got back.
+
 ### Symptoms requiring manual action
 Only if the refresh_token itself dies (1-year TTL, or if Pinterest revokes early). Signs:
 - Digest's Pinterest section shows `:warning: Pinterest token refresh failed`
 - `.env` shows an access_token that's noticeably old but can't be refreshed
 
-### Full re-auth steps (only if refresh_token is dead)
+If thumbnails are missing but metrics are fine, that's a **scope** problem, not
+expiry — look for `[pinterest] thumbnails unavailable` on stderr and re-auth
+with the full scope list above.
 
-1. Go to [Pinterest app page](https://developers.pinterest.com/apps/1562586).
-2. Build authorize URL:
-   ```
-   https://www.pinterest.com/oauth/?response_type=code&client_id=1562586&redirect_uri=https%3A%2F%2Flocalhost%2F&scope=ads%3Aread&state=natal
-   ```
-3. Authorize → redirect to `https://localhost/?code=...` (fails to load, check URL bar).
-4. Exchange:
+### Full re-auth steps
+
+Needed when the refresh_token dies **or when the grant loses a scope** (see the
+gotcha above — that's what happened on 2026-09-10).
+
+```bash
+npm run tokens:authurl     # prints the authorize URL with all four scopes
+```
+
+1. Open the printed URL, approve **every** scope checkbox.
+2. The browser redirects to `https://localhost/?code=...` and fails to load —
+   that's expected, copy the `code` value out of the URL bar.
+3. Seed it (auth codes are single-use and expire fast, so don't dawdle):
+
    ```bash
-   curl -s -X POST "https://api.pinterest.com/v5/oauth/token" \
-     -u "1562586:APP_SECRET" \
-     -H "Content-Type: application/x-www-form-urlencoded" \
-     -d "grant_type=authorization_code" \
-     -d "code=AUTH_CODE" \
-     -d "redirect_uri=https://localhost/"
+   npm run tokens:seed:pinterest -- <auth_code>
    ```
-5. Response includes `access_token` (paste into `PINTEREST_ACCESS_TOKEN`) and `refresh_token` (paste into `PINTEREST_REFRESH_TOKEN`).
+
+That stores both tokens, records expiry, and prints the granted scopes so you
+can confirm all four landed. Then `npm run tokens` to verify, and the digest
+keeps it renewed from there.
+
 
 App secret rotates occasionally; if you rotate it, update `PINTEREST_APP_SECRET` in `.env` AND re-do the full OAuth flow above (existing refresh_token tied to old secret).
 
