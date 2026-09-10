@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { stdin } from "node:process";
 import { daysUntil, ENV_FILE } from "../adapters/tokenStore.js";
 import * as pinterestAuth from "../adapters/pinterestAuth.js";
 import * as metaAuth from "../adapters/metaAuth.js";
@@ -203,18 +204,42 @@ function pad(s: string, n: number): string {
   return s.length >= n ? s : s + " ".repeat(n - s.length);
 }
 
+/**
+ * Read a secret from stdin so it never lands in shell history or a process
+ * list. `pbpaste | npm run tokens:seed:meta` is the smooth path. Passing the
+ * value as an argv argument still works but is discouraged for exactly that
+ * reason — argv is visible to `ps` and gets written to ~/.zsh_history.
+ */
+async function readSecretFromStdin(): Promise<string | undefined> {
+  if (stdin.isTTY) return undefined;
+  const chunks: Buffer[] = [];
+  for await (const chunk of stdin) chunks.push(Buffer.from(chunk));
+  const value = Buffer.concat(chunks).toString("utf-8").trim();
+  return value || undefined;
+}
+
 async function main(): Promise<void> {
-  const [cmd, arg] = process.argv.slice(2);
+  const [cmd, argvArg] = process.argv.slice(2);
+  // Read stdin at most once — consuming it twice would return empty the second
+  // time. Prefer piped input; fall back to argv, warning that it's on the record.
+  const piped = cmd?.startsWith("seed") ? await readSecretFromStdin() : undefined;
+  const arg = piped ?? argvArg;
+  if (!piped && argvArg && cmd?.startsWith("seed")) {
+    console.error(
+      `[tokens] note: a secret passed as an argument is recorded in shell history — ` +
+        `\`pbpaste | npm run tokens:${cmd}\` avoids that.`,
+    );
+  }
 
   if (cmd === "seed:meta") {
-    if (!arg) throw new Error("usage: npm run tokens:seed:meta -- <short-lived-token>");
+    if (!arg) throw new Error("usage: pbpaste | npm run tokens:seed:meta");
     await metaAuth.seedFromShortLivedToken(arg);
     console.log("Meta token seeded. Re-run `npm run tokens` to confirm.");
     return;
   }
 
   if (cmd === "seed:pinterest") {
-    if (!arg) throw new Error("usage: npm run tokens:seed:pinterest -- <auth_code>");
+    if (!arg) throw new Error("usage: pbpaste | npm run tokens:seed:pinterest");
     await pinterestAuth.exchangeAuthCode(arg);
     console.log("Pinterest token seeded. Re-run `npm run tokens` to confirm.");
     return;
