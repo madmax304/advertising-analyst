@@ -1,22 +1,25 @@
 import type { CreativeMetrics, DateRange } from "../types.js";
-import { EVENT_MAP } from "../events/eventMap.js";
+import {
+  ATTRIBUTION,
+  EVENT_MAP,
+  METRIC_MAP,
+  REVENUE_MAP,
+  requiredFlatFields,
+  resolveFlat,
+} from "../events/eventMap.js";
 import { PinterestAuthError, isScopeError, refreshAccessToken } from "./pinterestAuth.js";
 
 const PINTEREST_API = "https://api.pinterest.com/v5";
-const ATTRIBUTION_LABEL = "30-day click";
+const ATTRIBUTION_LABEL = ATTRIBUTION.pinterest.label;
 
-// Pinterest column names verified 2026-04-16 via a bogus-column probe against
-// their Ads Analytics API. Event columns pulled from EVENT_MAP so a tracking
-// plan change only needs a one-line edit in eventMap.ts.
-// Note: revenue comes back in micro-dollars, divided to USD in the mapper.
-const COLUMNS = [
-  "SPEND_IN_DOLLAR",
-  "IMPRESSION_1",
-  "CLICKTHROUGH_1",
-  EVENT_MAP.purchase.pinterest, // TOTAL_CHECKOUT
-  EVENT_MAP.trial_start.pinterest, // TOTAL_SIGNUP
-  "TOTAL_CHECKOUT_VALUE_IN_MICRO_DOLLAR",
-] as const;
+// Column names come from eventMap — including the revenue column and its
+// micro-dollar conversion. This file used to hardcode
+// TOTAL_CHECKOUT_VALUE_IN_MICRO_DOLLAR while eventMap advertised
+// TOTAL_CHECKOUT_VALUE_IN_DOLLAR, so the "single source of truth" was wrong
+// about the one field nobody checked.
+// Columns verified 2026-04-16 via a bogus-column probe against the Ads
+// Analytics API.
+const COLUMNS = requiredFlatFields("pinterest");
 
 type AnalyticsRow = Record<string, unknown> & {
   AD_ID?: string | number;
@@ -155,15 +158,6 @@ async function fetchCampaignsMeta(
   return out;
 }
 
-function toNum(v: unknown): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
-  return 0;
-}
-
 export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics[]> {
   // Pinterest "production" OAuth tokens expire in 30 days, but sometimes get
   // revoked earlier. On 401, refresh via the refresh_token and retry once.
@@ -213,13 +207,13 @@ async function doFetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics
       adId,
       adName: meta?.name ?? `Ad ${adId}`,
       creativeId: adId, // Pinterest: the ad and creative are effectively 1:1 at this granularity
-      spend: toNum(row.SPEND_IN_DOLLAR),
-      impressions: toNum(row.IMPRESSION_1),
-      clicks: toNum(row.CLICKTHROUGH_1),
-      purchases: toNum(row[EVENT_MAP.purchase.pinterest]),
-      // Pinterest returns revenue in micro-dollars (millionths of a USD).
-      revenue: toNum(row.TOTAL_CHECKOUT_VALUE_IN_MICRO_DOLLAR) / 1_000_000,
-      trialStarts: toNum(row[EVENT_MAP.trial_start.pinterest]),
+      spend: resolveFlat(row, METRIC_MAP.spend.pinterest),
+      impressions: resolveFlat(row, METRIC_MAP.impressions.pinterest),
+      clicks: resolveFlat(row, METRIC_MAP.clicks.pinterest),
+      purchases: resolveFlat(row, EVENT_MAP.purchase.pinterest),
+      // micro-dollar → USD conversion lives in the map's transform.
+      revenue: resolveFlat(row, REVENUE_MAP.purchase.pinterest),
+      trialStarts: resolveFlat(row, EVENT_MAP.trial_start.pinterest),
     };
   });
 }

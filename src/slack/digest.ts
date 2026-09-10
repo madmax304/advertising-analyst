@@ -189,6 +189,13 @@ function rollupBlocks(sections: PlatformSection[]): SlackBlock[] {
         `Directional, not an accounting figure._`,
     );
   }
+  // The blended ROAS is the number most likely to be quoted in a meeting, and
+  // it is the least trustworthy one here: each network self-attributes its own
+  // revenue, nothing dedupes a customer claimed by two of them, and none of it
+  // is reconciled against booked cash. Say so where the number is read.
+  caveats.push(
+    `_Revenue is platform-claimed, self-attributed, and not deduped across networks._`,
+  );
 
   const header: SlackBlock = {
     type: "section",

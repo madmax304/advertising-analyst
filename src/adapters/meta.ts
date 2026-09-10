@@ -1,9 +1,17 @@
 import type { CreativeMetrics, DateRange } from "../types.js";
-import { EVENT_MAP, REVENUE_MAP } from "../events/eventMap.js";
+import {
+  ATTRIBUTION,
+  EVENT_MAP,
+  METRIC_MAP,
+  REVENUE_MAP,
+  metaRequestFields,
+  resolveFlat,
+  resolveMetaAction,
+} from "../events/eventMap.js";
 import { ensureFreshMetaToken } from "./metaAuth.js";
 
 const GRAPH_API = "https://graph.facebook.com/v20.0";
-const ATTRIBUTION_LABEL = "7-day click";
+const ATTRIBUTION_LABEL = ATTRIBUTION.meta.label;
 
 export type CreativeEnrichment = {
   thumbnailUrl?: string;
@@ -21,6 +29,7 @@ type MetaInsightRow = {
   spend?: string;
   impressions?: string;
   clicks?: string;
+  inline_link_clicks?: string;
   actions?: MetaAction[];
   action_values?: MetaAction[];
   conversions?: MetaAction[];
@@ -43,25 +52,6 @@ function readEnv(): MetaEnv {
   return { token, adAccount: normalized };
 }
 
-function sumAction(actions: MetaAction[] | undefined, types: readonly string[]): number {
-  if (!actions || types.length === 0) return 0;
-  // Prefer the first matching type (priority order). Don't double-count.
-  for (const type of types) {
-    const hit = actions.find((a) => a.action_type === type);
-    if (hit) {
-      const n = Number(hit.value);
-      return Number.isFinite(n) ? n : 0;
-    }
-  }
-  return 0;
-}
-
-function toNum(v: string | undefined): number {
-  if (!v) return 0;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics[]> {
   const env = readEnv();
   // Proactively roll the token if it's near expiry, and fail loudly with a
@@ -79,16 +69,16 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
       "ad_name",
       "campaign_id",
       "campaign_name",
-      "spend",
-      "impressions",
-      "clicks",
+      // Base metric names come from METRIC_MAP so the clicks field can't drift
+      // back to the all-clicks `clicks` — see the note there.
+      ...metaRequestFields(),
       "actions",
       "action_values",
       "conversions", // StartTrial/Subscribe live here, not in actions
       "conversion_values",
       "date_start",
     ].join(","),
-    action_attribution_windows: JSON.stringify(["7d_click"]),
+    action_attribution_windows: JSON.stringify([`${ATTRIBUTION.meta.clickDays}d_click`]),
     limit: "500",
   });
 
@@ -115,14 +105,15 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
     adId: row.ad_id,
     adName: row.ad_name,
     creativeId: row.ad_id, // Meta creative_id requires a second call; ad_id is stable for ranking
-    spend: toNum(row.spend),
-    impressions: toNum(row.impressions),
-    clicks: toNum(row.clicks),
-    // Purchase lives in `actions`; StartTrial lives in `conversions`.
-    // See src/events/eventMap.ts for the why.
-    purchases: sumAction(row.actions, EVENT_MAP.purchase.meta),
-    revenue: sumAction(row.action_values, REVENUE_MAP.purchase.meta),
-    trialStarts: sumAction(row.conversions, EVENT_MAP.trial_start.meta),
+    // Every field below resolves through eventMap — no column names here.
+    spend: resolveFlat(row as unknown as Record<string, unknown>, METRIC_MAP.spend.meta),
+    impressions: resolveFlat(row as unknown as Record<string, unknown>, METRIC_MAP.impressions.meta),
+    clicks: resolveFlat(row as unknown as Record<string, unknown>, METRIC_MAP.clicks.meta),
+    // Purchase lives in `actions`; StartTrial lives in `conversions`; values in
+    // `action_values`. The container is part of each spec.
+    purchases: resolveMetaAction(row, EVENT_MAP.purchase.meta),
+    revenue: resolveMetaAction(row, REVENUE_MAP.purchase.meta),
+    trialStarts: resolveMetaAction(row, EVENT_MAP.trial_start.meta),
   }));
 }
 

@@ -1,8 +1,15 @@
 import type { CreativeMetrics, DateRange } from "../types.js";
-import { EVENT_MAP } from "../events/eventMap.js";
+import {
+  ATTRIBUTION,
+  EVENT_MAP,
+  METRIC_MAP,
+  REVENUE_MAP,
+  requiredFlatFields,
+  resolveFlat,
+} from "../events/eventMap.js";
 
 const TIKTOK_API = "https://business-api.tiktok.com/open_api/v1.3";
-const ATTRIBUTION_LABEL = "7-day click / 1-day view";
+const ATTRIBUTION_LABEL = ATTRIBUTION.tiktok.label;
 
 export type CreativeEnrichment = {
   thumbnailUrl?: string;
@@ -45,13 +52,10 @@ async function fetchReportPage(
     data_level: "AUCTION_AD",
     // dimensions must be a JSON-encoded array per TikTok's spec
     dimensions: JSON.stringify(["ad_id", "stat_time_day"]),
+    // Metric names come from eventMap, including anything a transform needs
+    // (revenue is value_per_complete_payment × complete_payment).
     metrics: JSON.stringify([
-      "spend",
-      "impressions",
-      "clicks",
-      EVENT_MAP.purchase.tiktok, // "complete_payment"
-      "complete_payment_roas",
-      EVENT_MAP.trial_start.tiktok, // "total_start_trial"
+      ...requiredFlatFields("tiktok"),
       "ad_name",
       "campaign_id",
       "campaign_name",
@@ -77,12 +81,6 @@ async function fetchReportPage(
   return json;
 }
 
-function toNum(v: string | undefined): number {
-  if (!v) return 0;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMetrics[]> {
   const env = readEnv();
 
@@ -97,13 +95,13 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
   return rows.map((row): CreativeMetrics => {
     const { ad_id, stat_time_day } = row.dimensions;
     const m = row.metrics;
-    const spend = toNum(m.spend);
-    const purchases = toNum(m[EVENT_MAP.purchase.tiktok]);
-    const trialStarts = toNum(m[EVENT_MAP.trial_start.tiktok]);
-    // TikTok exposes ROAS directly; derive revenue = spend * ROAS so we keep
-    // the same normalized shape as Meta/Pinterest.
-    const roas = toNum(m.complete_payment_roas);
-    const revenue = spend * roas;
+    const spend = resolveFlat(m, METRIC_MAP.spend.tiktok);
+    const purchases = resolveFlat(m, EVENT_MAP.purchase.tiktok);
+    const trialStarts = resolveFlat(m, EVENT_MAP.trial_start.tiktok);
+    // Real currency, not spend × ROAS. Deriving revenue from the ROAS we then
+    // recompute as revenue/spend just handed TikTok's own number back, and
+    // ROAS's 2dp rounding distorted low-spend creatives.
+    const revenue = resolveFlat(m, REVENUE_MAP.purchase.tiktok);
     return {
       // `stat_time_day` comes back like "2026-04-15 00:00:00"; keep the YYYY-MM-DD head.
       date: stat_time_day.slice(0, 10),
@@ -115,8 +113,8 @@ export async function fetchCreativeMetrics(range: DateRange): Promise<CreativeMe
       adName: m.ad_name ?? `Ad ${ad_id}`,
       creativeId: ad_id,
       spend,
-      impressions: toNum(m.impressions),
-      clicks: toNum(m.clicks),
+      impressions: resolveFlat(m, METRIC_MAP.impressions.tiktok),
+      clicks: resolveFlat(m, METRIC_MAP.clicks.tiktok),
       purchases,
       revenue,
       trialStarts,
