@@ -41,6 +41,25 @@ export const WEEK_START_DAY = 4;
  */
 export const WEEK_SHIFT_DAYS = (WEEK_START_DAY + 6) % 7;
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A week reads as its full span, never as its start date alone.
+ *
+ * "Sep 17" on a Thursday looks a week stale even when it is the freshest
+ * complete week there is, because it names where the week began. "Sep 17-23"
+ * cannot be misread that way. This has confused a reader twice.
+ */
+export function weekLabel(start: Date, end: Date): string {
+  const a = `${MONTHS[start.getUTCMonth()]} ${start.getUTCDate()}`;
+  const b =
+    start.getUTCMonth() === end.getUTCMonth()
+      ? String(end.getUTCDate())
+      : `${MONTHS[end.getUTCMonth()]} ${end.getUTCDate()}`;
+  return `${a}-${b}`;
+}
+
 /**
  * Anchored weeks, most recent complete week last.
  */
@@ -56,7 +75,7 @@ export function lastCompleteWeeks(count: number, today = new Date()): WeekRange[
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 6);
     out.push({
-      label: iso(start),
+      label: weekLabel(start, end),
       start: iso(start),
       end: iso(end),
       daysMatured: Math.round((today.getTime() - end.getTime()) / 86_400_000),
@@ -309,12 +328,15 @@ export async function fetchFunnel(weeks: WeekRange[]): Promise<FunnelWeek[]> {
     return Number.isFinite(n) ? n : 0;
   };
 
+  // Join on `start`, never on `label`. The queries bucket with toStartOfWeek and
+  // return an ISO week-start, so `start` is the key; `label` is a human-readable
+  // span and changing it must not be able to silently empty this table.
   return weeks.map((w) => {
-    const fr = f.get(w.label);
-    const pr = p.get(w.label);
+    const fr = f.get(w.start);
+    const pr = p.get(w.start);
     return {
       week: w.label,
-      newCustomers: num(c.get(w.label)?.[1]),
+      newCustomers: num(c.get(w.start)?.[1]),
       paidVisitors: num(fr?.[1]),
       paidSignupDone: num(fr?.[2]),
       paidPlanSelect: num(fr?.[3]),
@@ -322,7 +344,7 @@ export async function fetchFunnel(weeks: WeekRange[]): Promise<FunnelWeek[]> {
       planSelects: num(pr?.[1]),
       nonTrialToPaid: num(pr?.[2]),
       freeTrialShare: num(pr?.[3]),
-      completeLoginPct: num(a.get(w.label)?.[1]),
+      completeLoginPct: num(a.get(w.start)?.[1]),
     };
   });
 }
