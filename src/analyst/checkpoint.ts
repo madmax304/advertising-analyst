@@ -21,16 +21,33 @@ import { fetchObservedRevenue, queryPostHog } from "../adapters/posthog.js";
 export type WeekRange = DateRange & { label: string; daysMatured: number };
 
 /**
- * Monday-start weeks, most recent complete week last.
+ * Which weekday a reporting week starts on, as JS getUTCDay(): 0 Sun … 4 Thu.
  *
- * PostHog's toStartOfWeek defaults to SUNDAY, so every query below passes mode
- * 1 to match these. Mixing the two shifts every figure by a day and is
- * invisible in the output.
+ * Thursday, because the marketing meeting is on Thursday. A week that ends
+ * Wednesday makes the report one day old at the meeting; a Monday-start week
+ * would end Sunday and be four days old by then. The cadence should fit the
+ * conversation the numbers are for.
+ */
+export const WEEK_START_DAY = 4;
+
+/**
+ * Days to subtract so the anchor weekday lands on a Monday.
+ *
+ * ClickHouse's toStartOfWeek only supports Sunday or Monday starts, so a
+ * Thursday week is expressed by shifting dates back 3 days, bucketing by
+ * Monday, then shifting forward again. Both the SQL and the JS below derive
+ * from this one constant — if they ever disagree, every figure silently moves
+ * by a day.
+ */
+export const WEEK_SHIFT_DAYS = (WEEK_START_DAY + 6) % 7;
+
+/**
+ * Anchored weeks, most recent complete week last.
  */
 export function lastCompleteWeeks(count: number, today = new Date()): WeekRange[] {
   const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
-  d.setUTCDate(d.getUTCDate() - dow); // Monday of the current, incomplete week
+  const dow = (d.getUTCDay() - WEEK_START_DAY + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - dow); // start of the current, incomplete week
   const iso = (x: Date) => x.toISOString().slice(0, 10);
   const out: WeekRange[] = [];
   for (let i = count; i >= 1; i--) {
@@ -189,7 +206,12 @@ export async function fetchFunnel(weeks: WeekRange[]): Promise<FunnelWeek[]> {
   const endExclusive = new Date(`${last.end}T00:00:00Z`);
   endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
   const to = `toDateTime('${endExclusive.toISOString().slice(0, 10)} 00:00:00')`;
-  const wk = (col: string) => `formatDateTime(toStartOfWeek(${col}, 1),'%Y-%m-%d')`;
+  // Shift so the anchor day becomes Monday, bucket, then shift back — see
+  // WEEK_SHIFT_DAYS. Passing mode 1 alone would give Monday weeks and every
+  // label would be off by three days against the JS ranges above.
+  const wk = (col: string) =>
+    `formatDateTime(toStartOfWeek(${col} - INTERVAL ${WEEK_SHIFT_DAYS} DAY, 1)` +
+    ` + INTERVAL ${WEEK_SHIFT_DAYS} DAY, '%Y-%m-%d')`;
 
   // Sequentially, with a retry: PostHog answers 503 "queries are a little too
   // busy" when four of these land at once, and 504 when one runs long. Both are
