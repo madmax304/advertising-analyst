@@ -80,6 +80,20 @@ function printSummary(weeks: CheckpointWeek[], funnel: FunnelWeek[]): void {
       "  * fewer than 7 days to mature — this week will read better once it settles.",
     );
   }
+
+  // The ~7-day rule was calibrated on a mix that was mostly direct purchase.
+  // A free trial bills at trial length + selection lag, so once trials are a
+  // large share of selections the week needs materially longer to settle, and
+  // its revenue is understated by more than the star implies.
+  const newest = funnel[funnel.length - 1];
+  if (newest && newest.freeTrialShare >= 25) {
+    console.log(
+      `\n  TRIAL-HEAVY MIX. ${newest.freeTrialShare.toFixed(1)}% of selections in the newest week were\n` +
+        "    free trials, which bill ~7 days after selection — so that revenue lands\n" +
+        `    around day 10-14, not day 7. Treat this week's observed ROAS and paid\n` +
+        "    counts as understated by more than the usual maturity allowance.",
+    );
+  }
 }
 
 function printNetworks(weeks: CheckpointWeek[]): void {
@@ -178,6 +192,13 @@ async function main(): Promise<void> {
 
   const tokens = await checkAll();
 
+  // A checkpoint whose data half silently failed is worse than no checkpoint —
+  // it looks complete. Exit non-zero so a scheduled run surfaces it. Computed
+  // before the --json branch: a JSON run that pulled nothing must fail too.
+  const problems = weeks.flatMap((w) => w.errors.map((e) => `${w.week.label}  ${e}`));
+  const missingObserved = weeks.every((w) => totals(w).observed === 0);
+  if (problems.length > 0 || missingObserved) process.exitCode = 1;
+
   if (json) {
     console.log(JSON.stringify({ weeks, funnel, tokens }, null, 2));
     return;
@@ -198,19 +219,11 @@ async function main(): Promise<void> {
     );
   }
 
-  const problems = weeks.flatMap((w) => w.errors.map((e) => `${w.week.label}  ${e}`));
   if (problems.length > 0) {
     console.log("\nPULL ERRORS");
     for (const p of problems) console.log("  " + p);
   }
-
-  // A checkpoint whose data half silently failed is worse than no checkpoint —
-  // it looks complete. Exit non-zero so a scheduled run surfaces it.
-  const missingObserved = weeks.every((w) => totals(w).observed === 0);
-  if (problems.length > 0 || missingObserved) {
-    if (missingObserved) console.log("\n  WARNING: no observed revenue in any week.");
-    process.exitCode = 1;
-  }
+  if (missingObserved) console.log("\n  WARNING: no observed revenue in any week.");
 }
 
 main().catch((err) => {
