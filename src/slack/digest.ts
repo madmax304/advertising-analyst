@@ -60,7 +60,14 @@ function creativeBlock(c: RankedCreative, rank: number): SlackBlock {
   const name = truncateAdName(c.adName);
   // If we have a previewUrl, linkify the name so clicks open the ad.
   const nameText = c.previewUrl ? `<${c.previewUrl}|${name}>` : name;
-  const body = `*${rank}.* ${nameText}\nROAS *${ratio(c.roas)}*, Spend ${usd(c.spend)}, ${plural(c.trialStarts, "trial")}`;
+  // Purchases before trials, matching the order in the totals lines above so
+  // the eye reads the same sequence at both altitudes. Per EVENT_MAP, purchases
+  // include renewals on Meta and TikTok — a high count here is not necessarily
+  // new customers.
+  const body =
+    `*${rank}.* ${nameText}\n` +
+    `ROAS *${ratio(c.roas)}*, Spend ${usd(c.spend)}, ` +
+    `${plural(c.purchases, "purchase")}, ${plural(c.trialStarts, "trial")}`;
 
   const block: SlackBlock = {
     type: "section",
