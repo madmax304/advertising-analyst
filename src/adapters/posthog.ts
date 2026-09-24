@@ -121,6 +121,24 @@ const REVENUE = `toFloatOrZero(JSONExtractString(properties,'revenue'))`;
 const NET_MULTIPLIER = `if(JSONExtractString(properties,'store') IN (${APP_STORES.map((s) => `'${s}'`).join(",")}), 0.70, 0.95)`;
 const ALL_REVENUE_EVENTS = [...NEW_MONEY_EVENTS, RENEWAL_EVENT].map((e) => `'${e}'`).join(",");
 
+/**
+ * Run an arbitrary HogQL query. Exported for the weekly checkpoint, which asks
+ * funnel questions this adapter has no opinion about.
+ *
+ * Note PostHog caps result rows at 100 unless the query says otherwise — always
+ * write an explicit LIMIT when a query can return more, or it will silently
+ * truncate and look like a small dataset.
+ */
+export async function queryPostHog<T = unknown[]>(query: string): Promise<T[]> {
+  const env = readEnv();
+  if (!env) {
+    throw new Error(
+      "PostHog is not configured — set POSTHOG_HOST, POSTHOG_PROJECT_ID and POSTHOG_API_KEY in .env",
+    );
+  }
+  return hogql<T>(env, query);
+}
+
 export async function fetchObservedRevenue(
   range: DateRange,
   lookbackDays: number = DEFAULT_LOOKBACK_DAYS,
