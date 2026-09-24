@@ -153,9 +153,9 @@ Buys us: 8am daily delivery, Claude-in-the-loop error reporting, manual "fire no
 
 | Platform | Status | What's needed |
 |----------|--------|---------------|
-| Meta Marketing API | ✅ **Approved** | Port existing System User token + `ad_account_id` into `.env` |
+| Meta Marketing API | ✅ **Approved** | USER access token + `ad_account_id` in `.env`. *Not* a System User token — verified via `/debug_token` 2026-09-10 (`type: USER`, 60-day TTL). Auto-rolled by `src/adapters/metaAuth.ts`; see TOKEN_ROTATION.md. |
 | TikTok Business API | ✅ **Approved** | Port existing access token + `advertiser_id` into `.env` |
-| Pinterest Ads API | ⬜ **Net-new** | Create app at developers.pinterest.com, request `ads:read`, complete OAuth, capture access token + `ad_account_id` |
+| Pinterest Ads API | ✅ **Live** | Requires `ads:read` **plus** `pins:read`, `boards:read`, `user_accounts:read` — reporting works on `ads:read` alone but creative thumbnails 401 without the others. See TOKEN_ROTATION.md. |
 | Slack incoming webhook | ⬜ **Net-new** | `Apps → Incoming Webhooks → Add to Slack`, pick channel, copy URL |
 
 The Meta App Review risk from v1/v2 of this plan is gone — you already have it.
@@ -204,8 +204,8 @@ Everything needed to start week 1. I'll execute against each as you hand them ov
 **API access / credentials**
 1. **Slack incoming webhook URL** — create via `Apps → Incoming Webhooks` pointed at the target channel. Paste the URL; I'll drop it into `.env`.
 2. **Target Slack channel name** — just so we're aligned on where the webhook posts.
-3. **Pinterest** — create a Pinterest developer app, request `ads:read`, complete OAuth, provide the access token and `ad_account_id`.
-4. **Meta credentials** (from your legacy code) — System User access token + `ad_account_id` (format `act_XXXXXXX`).
+3. **Pinterest** — done. Re-auth needs all four scopes (`ads:read`, `pins:read`, `boards:read`, `user_accounts:read`): `npm run tokens:authurl`.
+4. **Meta credentials** (from your legacy code) — access token + `ad_account_id` (format `act_XXXXXXX`). Note: this is a **USER** token, not the System User token this plan originally assumed; a System User token would never expire and remains the durable fix.
 5. **TikTok credentials** (from your legacy code) — access token + `advertiser_id`.
 
 **Data & event mapping**
