@@ -13,7 +13,8 @@
     "tokens": "tsx src/cli/tokens.ts",
     "tokens:renew": "tsx src/cli/tokens.ts renew",
     "tokens:seed:pinterest": "tsx src/cli/tokens.ts seed:pinterest",
-    "tokens:authurl": "tsx src/cli/tokens.ts authurl"
+    "tokens:authurl": "tsx src/cli/tokens.ts authurl",
+    "checkpoint": "tsx src/cli/checkpoint.ts"
   },
   "dependencies": {
     "@slack/webhook": "^7.0.5",
