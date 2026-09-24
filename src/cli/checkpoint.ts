@@ -50,7 +50,7 @@ function totals(w: CheckpointWeek) {
 function printSummary(weeks: CheckpointWeek[], funnel: FunnelWeek[]): void {
   console.log("\nALL NETWORKS");
   console.log(
-    "  week        spend   claimed  observed   new cust  coverage  maturity",
+    "  week          spend   claimed  observed   new cust  coverage  maturity",
   );
   weeks.forEach((w, i) => {
     const t = totals(w);
@@ -58,7 +58,7 @@ function printSummary(weeks: CheckpointWeek[], funnel: FunnelWeek[]): void {
     const mat = w.week.daysMatured < 7 ? `${w.week.daysMatured}d *` : `${w.week.daysMatured}d`;
     console.log(
       "  " +
-        padR(w.week.label, 12) +
+        padR(w.week.label, 14) +
         pad(usd(t.spend), 8) +
         pad(ratio(div(t.claimed, t.spend)), 10) +
         pad(ratio(div(t.observed, t.spend)), 10) +
@@ -100,16 +100,16 @@ function printNetworks(weeks: CheckpointWeek[]): void {
   for (const p of PLATFORMS) {
     if (!weeks.some((w) => w.networks[p])) continue;
     console.log(`\n${LABEL[p].toUpperCase()}`);
-    console.log("  week        spend      CPM     CTR   claimed   observed");
+    console.log("  week          spend      CPM     CTR   claimed   observed");
     for (const w of weeks) {
       const n = w.networks[p];
       if (!n) {
-        console.log("  " + padR(w.week.label, 12) + pad("(pull failed)", 10));
+        console.log("  " + padR(w.week.label, 14) + pad("(pull failed)", 10));
         continue;
       }
       console.log(
         "  " +
-          padR(w.week.label, 12) +
+          padR(w.week.label, 14) +
           pad(usd(n.spend), 8) +
           pad("$" + (div(n.spend, n.impressions) * 1000).toFixed(2), 9) +
           pad(pct(div(n.clicks, n.impressions)), 8) +
@@ -123,13 +123,13 @@ function printNetworks(weeks: CheckpointWeek[]): void {
 function printSourceSplit(weeks: CheckpointWeek[]): void {
   if (!weeks.some((w) => w.metaBySource.vendor.spend > 0)) return;
   console.log("\nMETA BY CREATIVE SOURCE  (campaign-name split; see canon)");
-  console.log("  week          vendor spend  claimed    in-house spend  claimed");
+  console.log("  week            vendor spend  claimed    in-house spend  claimed");
   for (const w of weeks) {
     const v = w.metaBySource.vendor;
     const h = w.metaBySource.inHouse;
     console.log(
       "  " +
-        padR(w.week.label, 12) +
+        padR(w.week.label, 14) +
         pad(usd(v.spend), 13) +
         pad(ratio(div(v.claimedRevenue, v.spend)), 9) +
         pad(usd(h.spend), 18) +
@@ -140,12 +140,12 @@ function printSourceSplit(weeks: CheckpointWeek[]): void {
 
 function printFunnel(funnel: FunnelWeek[]): void {
   console.log("\nWEB FUNNEL  join.natal.app, paid visitors, cohorted by first visit");
-  console.log("  week        visitors  signup   plan    paid    paywall  free-tr  login");
+  console.log("  week          visitors  signup   plan    paid    paywall  free-tr  login");
   for (const f of funnel) {
     const rate = (n: number) => pct(div(n, f.paidVisitors));
     console.log(
       "  " +
-        padR(f.week, 12) +
+        padR(f.week, 14) +
         pad(String(f.paidVisitors), 8) +
         pad(rate(f.paidSignupDone), 9) +
         pad(rate(f.paidPlanSelect), 8) +
