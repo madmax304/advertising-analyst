@@ -67,7 +67,15 @@ function printSummary(weeks: CheckpointWeek[], funnel: FunnelWeek[]): void {
         pad(mat, 10),
     );
   });
-  if (weeks.some((w) => w.week.daysMatured < 7)) {
+  const freshest = weeks[weeks.length - 1]?.week.daysMatured ?? 99;
+  if (freshest <= 3) {
+    console.log(
+      "\n  * PROVISIONAL. The newest week has had " +
+        `${freshest} day(s) to mature, against the ~7 a cohort needs. Its conversion\n` +
+        "    and paywall figures WILL rise. Do not report them as a decline. Compare\n" +
+        "    them only against what the previous week read at the same age.",
+    );
+  } else if (weeks.some((w) => w.week.daysMatured < 7)) {
     console.log(
       "  * fewer than 7 days to mature — this week will read better once it settles.",
     );
