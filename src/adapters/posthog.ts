@@ -143,9 +143,14 @@ WITH conv AS (
   WHERE event IN (${ALL_REVENUE_EVENTS}) AND timestamp >= ${from} AND timestamp < ${to}
 ),
 clk AS (
+  -- Restricted to people who actually converted in-window. Without this the
+  -- scan covers every click-tagged pageview in the lookback (hundreds of
+  -- thousands of people) and the query began timing out at 504 as the dataset
+  -- grew — the digest silently lost this section for days before anyone noticed.
   SELECT person_id, timestamp AS click_ts, ${CLICK_ID_CASE} AS network
   FROM events
   WHERE event = '$pageview' AND timestamp >= ${lookback} AND timestamp < ${to} AND ${HAS_CLICK_ID}
+    AND person_id IN (SELECT person_id FROM conv)
 )
 SELECT network,
        countIf(is_new = 1) AS conv_new,
@@ -173,9 +178,16 @@ GROUP BY network`;
   // 2026-09-03..09) — renewals come from cohorts acquired long before any click
   // in the lookback, so they belong in neither side or both.
   const coverage = `
-WITH clicked AS (
+WITH newmoney AS (
+  SELECT person_id, ${REVENUE} AS rev FROM events
+  WHERE event IN (${NEW_MONEY_EVENTS.map((e) => `'${e}'`).join(",")})
+    AND timestamp >= ${from} AND timestamp < ${to}
+),
+clicked AS (
+  -- Same restriction as above, for the same reason.
   SELECT DISTINCT person_id FROM events
   WHERE event = '$pageview' AND timestamp >= ${lookback} AND timestamp < ${to} AND ${HAS_CLICK_ID}
+    AND person_id IN (SELECT person_id FROM newmoney)
 )
 SELECT count() AS conversions,
        countIf(person_id IN (SELECT person_id FROM clicked)) AS joinable_conversions,
