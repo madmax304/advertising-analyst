@@ -98,9 +98,11 @@ function printSummary(weeks: CheckpointWeek[], funnel: FunnelWeek[]): void {
     console.log(
       `\n  TRIAL-HEAVY MIX. ${newest.freeTrialShare.toFixed(1)}% of selections in the newest week were\n` +
         "    free trials, which bill ~7 days after selection. Observed revenue counts\n" +
-        "    cash BOOKED in the week, so that lag shifts revenue between weeks:\n" +
-        "      · the week that SOLD a large trial cohort reads too low\n" +
+        "    cash BOOKED in the week, so these columns NEVER MATURE — a trial sold in\n" +
+        "    one week lands in the next week's row and this row will not move later:\n" +
+        "      · the week that SOLD a large trial cohort reads too low, permanently\n" +
         "      · the week that FOLLOWS it collects the cash and reads too high\n" +
+        "    (Sep 17-23 read 0.17 observed / 330 new cust at BOTH 2 and 9 days old.)\n" +
         "    Before calling any move in observed ROAS or new customers real, split\n" +
         "    booked revenue into trial conversions vs immediate purchases and check\n" +
         "    how much was sold in an earlier week.",
