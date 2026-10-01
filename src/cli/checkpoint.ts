@@ -82,17 +82,35 @@ function printSummary(weeks: CheckpointWeek[], funnel: FunnelWeek[]): void {
   }
 
   // The ~7-day rule was calibrated on a mix that was mostly direct purchase.
-  // A free trial bills at trial length + selection lag, so once trials are a
-  // large share of selections the week needs materially longer to settle, and
-  // its revenue is understated by more than the star implies.
+  // A free trial bills at trial length + selection lag, so trials sold in one
+  // week land as cash in the next.
+  //
+  // Observed revenue is booked-in-week, not cohorted: `conv` in the PostHog
+  // adapter filters revenue events to the week, then looks clicks back 90 days.
+  // So the lag moves revenue ACROSS week boundaries in both directions, and the
+  // error is not always an understatement. A week that sold a big trial cohort
+  // is understated; the week that follows it collects that cash and is
+  // overstated. Reading only the first half of that produced a "turnaround"
+  // that was last week's backlog arriving.
   const newest = funnel[funnel.length - 1];
+  const prior = funnel[funnel.length - 2];
   if (newest && newest.freeTrialShare >= 25) {
     console.log(
       `\n  TRIAL-HEAVY MIX. ${newest.freeTrialShare.toFixed(1)}% of selections in the newest week were\n` +
-        "    free trials, which bill ~7 days after selection — so that revenue lands\n" +
-        `    around day 10-14, not day 7. Treat this week's observed ROAS and paid\n` +
-        "    counts as understated by more than the usual maturity allowance.",
+        "    free trials, which bill ~7 days after selection. Observed revenue counts\n" +
+        "    cash BOOKED in the week, so that lag shifts revenue between weeks:\n" +
+        "      · the week that SOLD a large trial cohort reads too low\n" +
+        "      · the week that FOLLOWS it collects the cash and reads too high\n" +
+        "    Before calling any move in observed ROAS or new customers real, split\n" +
+        "    booked revenue into trial conversions vs immediate purchases and check\n" +
+        "    how much was sold in an earlier week.",
     );
+    if (prior && prior.freeTrialShare >= 25) {
+      console.log(
+        "    Both of the last two weeks are trial-heavy, so the shift partly cancels\n" +
+          "    — but only once the mix has been stable for longer than the trial.",
+      );
+    }
   }
 }
 
